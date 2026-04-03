@@ -1,0 +1,23 @@
+# Python
+.venv/
+venv/
+__pycache__/
+*.py[cod]
+*$py.class
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# MLflow / local artifacts
+mlruns/
+mlartifacts/
+.mlflow/
+
+# Secrets (eBay API keys, etc.)
+.env
+.env.*
+
+# OS / IDE
+.DS_Store
+.idea/
+.vscode/

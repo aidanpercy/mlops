@@ -1,3 +1,15 @@
+Metadata-Version: 2.4
+Name: clothing-mlops
+Version: 0.1.0
+Summary: Clothing value prediction with eBay data and MLflow
+Requires-Python: >=3.10
+Description-Content-Type: text/markdown
+Requires-Dist: mlflow<3,>=2.10
+Requires-Dist: pandas>=2.0
+Requires-Dist: numpy>=1.24
+Requires-Dist: scikit-learn>=1.3
+Requires-Dist: python-dotenv>=1.0
+
 # Clothing value prediction (MLOps)
 
 Predict clothing depreciation or appreciation using listing data (planned: **eBay API**). This repo wires up **MLflow** for experiment tracking before real data lands.
