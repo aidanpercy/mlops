@@ -1,7 +1,10 @@
 README.md
 pyproject.toml
 src/clothing_mlops/__init__.py
+src/clothing_mlops/data_pipeline.py
 src/clothing_mlops/mlflow_setup.py
+src/clothing_mlops/modeling.py
+src/clothing_mlops/service.py
 src/clothing_mlops.egg-info/PKG-INFO
 src/clothing_mlops.egg-info/SOURCES.txt
 src/clothing_mlops.egg-info/dependency_links.txt

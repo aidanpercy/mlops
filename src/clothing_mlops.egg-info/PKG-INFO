@@ -4,51 +4,130 @@ Version: 0.1.0
 Summary: Clothing value prediction with eBay data and MLflow
 Requires-Python: >=3.10
 Description-Content-Type: text/markdown
+Requires-Dist: beautifulsoup4>=4.12
+Requires-Dist: fastapi<1,>=0.115
+Requires-Dist: httpx<1,>=0.27
 Requires-Dist: mlflow<3,>=2.10
 Requires-Dist: pandas>=2.0
 Requires-Dist: numpy>=1.24
 Requires-Dist: scikit-learn>=1.3
 Requires-Dist: python-dotenv>=1.0
+Requires-Dist: uvicorn<1,>=0.30
 
 # Clothing value prediction (MLOps)
 
-Predict clothing depreciation or appreciation using listing data (planned: **eBay API**). This repo wires up **MLflow** for experiment tracking before real data lands.
+Predict clothing resale value using sold-listing data. The repo now includes:
+
+- a scraper-aligned raw/bronze/silver data pipeline
+- MLflow-backed training and model registration
+- a FastAPI prediction service for the deployment milestone
 
 ## Quick start
 
 ```bash
-cd final_project
-python3 -m venv .venv
-source .venv/bin/activate   # Windows: .venv\Scripts\activate
+cd mlops
+python3 -m venv venv
+source venv/bin/activate   # Windows: venv\Scripts\activate
 pip install -U pip
 pip install -e .
 ```
 
-Log a placeholder run (creates `./mlruns`):
+Build the sample sold-listings dataset:
 
 ```bash
-python scripts/train_placeholder.py
+python scripts/build_sample_dataset.py
 ```
 
-Browse experiments in the UI (separate terminal):
+Train and log a baseline model to MLflow:
+
+```bash
+python scripts/train_model.py
+```
+
+Browse experiments in the UI:
 
 ```bash
 mlflow ui --backend-store-uri file:./mlruns
 ```
 
-Open http://127.0.0.1:5000 — you should see experiment `clothing-value-prediction` and run `placeholder-baseline`.
+The service expects a model URI in MLflow Model Registry by default:
+
+```bash
+export MLFLOW_SERVING_MODEL_URI="models:/clothing-value-model/latest"
+uvicorn clothing_mlops.service:app --reload
+```
+
+If you are working only with a local run artifact before registry setup, you can override the URI with a direct run-based model URI.
 
 ## Configuration
 
 | Env var | Purpose |
 |--------|---------|
 | `MLFLOW_TRACKING_URI` | Defaults to `file:<repo>/mlruns`. Set to a remote server when you have one. |
-| `MLFLOW_EXPERIMENT_NAME` | Defaults to `clothing-value-prediction`. |
+| `MLFLOW_EXPERIMENT_NAME` | Defaults to `item-value-prediction`. |
+| `MLFLOW_MODEL_NAME` | Model Registry name used by the service. Defaults to `clothing-value-model`. |
+| `MLFLOW_SERVING_MODEL_URI` | Explicit model URI for the service, such as `models:/clothing-value-model/latest`. |
 
-## Where to go next
+## Data pipeline
 
-1. **Ingest**: script or job that pulls eBay listings → raw tables/files (store paths or hashes in MLflow tags).
-2. **Train**: replace `scripts/train_placeholder.py` with real features + model; log `mlflow.log_params`, `mlflow.log_metrics`, and `mlflow.sklearn.log_model` (or `pyfunc`) when ready.
-3. **Registry**: use MLflow Model Registry when you have a baseline worth promoting.
+The ingestion side of the project is organized into three layers:
+
+- `data/raw/`: one HTML snapshot per listing plus a manifest
+- `data/bronze/`: parsed sold-listing records
+- `data/silver/`: normalized training dataset and summary metadata
+
+Each record includes traceability fields such as `listing_id`, `source_url`, `scrape_timestamp`, `parser_version`, and `sold_date`.
+
+## API endpoints
+
+The FastAPI service exposes the milestone endpoints:
+
+- `GET /` returns a welcome payload and example request body
+- `GET /health` confirms whether the MLflow model loaded successfully
+- `POST /predict` validates input with Pydantic and returns a predicted sale price
+
+Example request:
+
+```json
+{
+  "brand": "Patagonia",
+  "category": "Jacket",
+  "size": "M",
+  "condition": "used_very_good",
+  "color": "Blue",
+  "material": "Polyester",
+  "listing_price": 129.0,
+  "shipping_price": 12.5
+}
+```
+
+Example response:
+
+```json
+{
+  "predicted_sale_price": 126.13,
+  "model_status": "ok"
+}
+```
+
+## Docker
+
+Build and run the API container:
+
+```bash
+docker build -t clothing-value-api .
+docker run -p 8000:8000 \
+  -v "$(pwd)/mlruns:/app/mlruns" \
+  -e MLFLOW_TRACKING_URI="file:/app/mlruns" \
+  -e MLFLOW_SERVING_MODEL_URI="models:/clothing-value-model/latest" \
+  clothing-value-api
+```
+
+## Project flow
+
+1. Build raw/bronze/silver sold-listings artifacts with `python scripts/build_sample_dataset.py`
+2. Train a baseline model and log it to MLflow with `python scripts/train_model.py`
+3. Register or reference the trained model in MLflow
+4. Serve predictions through FastAPI and package the service with Docker
 
 `mlruns/` is gitignored; commit code and configs, not local run stores (or export to a shared tracking server for the team).

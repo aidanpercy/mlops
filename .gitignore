@@ -12,6 +12,7 @@ __pycache__/
 mlruns/
 mlartifacts/
 .mlflow/
+data/
 
 # Secrets (eBay API keys, etc.)
 .env
