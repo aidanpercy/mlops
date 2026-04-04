@@ -176,16 +176,6 @@ docker run -p 8000:8000 \
 
 Use the same published image name in your report, screenshot, and submission PDF.
 
-## Milestone submission checklist
-
-Include the following in your submission PDF:
-
-1. GitHub repository link for the full project
-2. Direct link to the endpoint definitions in `src/clothing_mlops/service.py`
-3. Screenshot of the published Docker image in Docker Hub (or another artifact registry)
-4. Brief run instructions summary, with this README as the full source of commands
-5. Example `/predict` request and response format
-
 ## Project flow
 
 1. Build raw/bronze/silver sold-listings artifacts with `python scripts/build_sample_dataset.py`
