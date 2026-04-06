@@ -1,0 +1,7 @@
+Run complete
+Queries: women dress, men jacket, vintage jeans, sneakers
+Fetched: 0
+Inserted new: 0
+Duplicates ignored: 0
+Database: /Users/katmalneva/MSDS/MLops/ebay_historical_clothing_scraper/data/ebay_historical.db
+CSV export: /Users/katmalneva/MSDS/MLops/ebay_historical_clothing_scraper/data/exports/ebay_historical_20260406_140041.csv
