@@ -17,8 +17,15 @@ class ServiceTestCase(unittest.TestCase):
     def test_root_endpoint(self) -> None:
         response = self.client.get("/")
         self.assertEqual(response.status_code, 200)
+        self.assertIn("text/html", response.headers["content-type"])
+        self.assertIn("What are you thinking of purchasing?", response.text)
+        self.assertIn("spiffy", response.text.lower())
+
+    def test_api_root_endpoint(self) -> None:
+        response = self.client.get("/api")
+        self.assertEqual(response.status_code, 200)
         body = response.json()
-        self.assertEqual(body["message"], "Clothing value prediction service")
+        self.assertEqual(body["message"], "Spiffy value prediction service")
         self.assertEqual(body["example_request"], prediction_example())
 
     def test_health_endpoint(self) -> None:
@@ -39,6 +46,20 @@ class ServiceTestCase(unittest.TestCase):
     def test_predict_validation(self) -> None:
         response = self.client.post("/predict", json={"brand": "Patagonia"})
         self.assertEqual(response.status_code, 422)
+
+    def test_lifetime_curve_endpoint(self) -> None:
+        response = self.client.post(
+            "/api/lifetime-curve",
+            json={
+                "item_name": "fear of god essentials hoodie",
+                "purchase_price": 140.0,
+            },
+        )
+        self.assertEqual(response.status_code, 200)
+        body = response.json()
+        self.assertEqual(body["curve_type"], "medium_depreciation")
+        self.assertEqual(body["points"][0]["value"], 140.0)
+        self.assertLess(body["points"][-1]["value"], body["points"][0]["value"])
 
 
 if __name__ == "__main__":

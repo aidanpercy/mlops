@@ -5,6 +5,7 @@ Predict clothing resale value using sold-listing data. The repo now includes:
 - a scraper-aligned raw/bronze/silver data pipeline
 - MLflow-backed training and model registration
 - a FastAPI prediction service for the deployment milestone
+- a one-page `Spiffy` web UI served from the same app for Cloud Run deployment
 
 ## Quick start
 
@@ -34,13 +35,13 @@ Browse experiments in the UI:
 mlflow ui --backend-store-uri file:./mlruns
 ```
 
-## Run the API locally
+## Run the App Locally
 
 The service loads the model from the local MLflow Model Registry in `./mlruns` by default. If
 you have already trained the baseline model in this repo, the latest registered version is loaded
 from `models:/clothing-value-model/latest`.
 
-Start the API:
+Start the web app and API:
 
 ```bash
 export MLFLOW_SERVING_MODEL_URI="models:/clothing-value-model/latest"
@@ -53,7 +54,8 @@ with a direct run-based model URI.
 Verify the required milestone endpoints in another terminal:
 
 ```bash
-curl http://127.0.0.1:8000/
+open http://127.0.0.1:8000/
+curl http://127.0.0.1:8000/api
 curl http://127.0.0.1:8000/health
 curl -X POST http://127.0.0.1:8000/predict \
   -H "Content-Type: application/json" \
@@ -66,6 +68,17 @@ curl -X POST http://127.0.0.1:8000/predict \
     "material": "Polyester",
     "listing_price": 129.0,
     "shipping_price": 12.5
+  }'
+```
+
+Generate the placeholder lifetime value curve used by the UI:
+
+```bash
+curl -X POST http://127.0.0.1:8000/api/lifetime-curve \
+  -H "Content-Type: application/json" \
+  -d '{
+    "item_name": "fear of god essentials hoodie",
+    "purchase_price": 140
   }'
 ```
 
@@ -104,13 +117,29 @@ python scripts/download_html_pages.py urls.txt --output-dir data/raw/downloads
 
 Where `urls.txt` contains one URL per line. The script saves each HTML file plus `download_manifest.csv` with status and output path.
 
+## App Structure For Cloud Run
+
+The current structure is intentionally a single service:
+
+- `GET /` serves the `Spiffy` web app
+- `GET /api` returns API metadata and an example prediction payload
+- `GET /health` returns service readiness
+- `POST /predict` keeps the model-backed prediction surface
+- `POST /api/lifetime-curve` powers the placeholder depreciation chart for the UI
+
+This is the simplest Cloud Run deployment shape right now because one container can serve both the
+frontend and backend. If the UI later grows into a larger React/Vite app, it can still be split
+out behind a load balancer or served as a static build artifact, but that complexity is not needed
+yet.
+
 ## API endpoints
 
 The FastAPI service exposes the milestone endpoints:
 
-- `GET /` returns a welcome payload and example request body
+- `GET /api` returns a welcome payload and example request body
 - `GET /health` confirms whether the MLflow model loaded successfully
 - `POST /predict` validates input with Pydantic and returns a predicted sale price
+- `POST /api/lifetime-curve` returns a generic medium-depreciation value curve for the UI
 
 Example request:
 
@@ -138,7 +167,7 @@ Example response:
 
 ## Docker
 
-Build and run the API container locally:
+Build and run the app container locally:
 
 ```bash
 docker build -t clothing-value-api .
