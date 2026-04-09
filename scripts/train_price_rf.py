@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
 Train a Random Forest regressor on cleaned eBay data to predict sold price
-from brand_name, item_type, and condition.
+from brand_name, item_type, condition, and initial_price (retail MSRP from clothing.csv match).
 
 Usage (from repo root):
   python scripts/train_price_rf.py
@@ -23,6 +23,7 @@ import mlflow
 import pandas as pd
 from sklearn.compose import ColumnTransformer
 from sklearn.ensemble import RandomForestRegressor
+from sklearn.impute import SimpleImputer
 from sklearn.metrics import mean_absolute_error, mean_squared_error
 from sklearn.model_selection import train_test_split
 from sklearn.pipeline import Pipeline
@@ -35,7 +36,9 @@ if str(SRC_DIR) not in sys.path:
 
 from clothing_mlops.mlflow_setup import set_experiment  # noqa: E402
 
-FEATURE_COLUMNS = ["brand_name", "item_type", "condition"]
+CAT_FEATURES = ["brand_name", "item_type", "condition"]
+NUM_FEATURES = ["initial_price"]
+FEATURE_COLUMNS = CAT_FEATURES + NUM_FEATURES
 TARGET_COLUMN = "price"
 DEFAULT_DATA_CSV = ROOT / "ebay_historical_clothing_scraper/data/processed/ebay_historical_cleaned.csv"
 DEFAULT_MODEL_OUT = ROOT / "models/ebay_price_rf.joblib"
@@ -47,7 +50,12 @@ def build_pipeline(n_estimators: int, max_depth: int | None, random_state: int) 
             (
                 "categorical",
                 OneHotEncoder(handle_unknown="ignore", sparse_output=False),
-                FEATURE_COLUMNS,
+                CAT_FEATURES,
+            ),
+            (
+                "numeric",
+                SimpleImputer(strategy="median"),
+                NUM_FEATURES,
             ),
         ],
         remainder="drop",
@@ -73,11 +81,14 @@ def load_dataset(path: Path) -> pd.DataFrame:
         df = pd.read_parquet(path)
     else:
         df = pd.read_csv(path)
-    for col in FEATURE_COLUMNS:
+    for col in CAT_FEATURES:
         if col not in df.columns:
             raise ValueError(f"Dataset missing column {col!r}: {path}")
     if TARGET_COLUMN not in df.columns:
         raise ValueError(f"Dataset missing target {TARGET_COLUMN!r}: {path}")
+    if "initial_price" not in df.columns:
+        df = df.copy()
+        df["initial_price"] = float("nan")
     return df
 
 
@@ -86,9 +97,10 @@ def prepare_xy(df: pd.DataFrame) -> tuple[pd.DataFrame, pd.Series]:
     work[TARGET_COLUMN] = pd.to_numeric(work[TARGET_COLUMN], errors="coerce")
     work = work.dropna(subset=[TARGET_COLUMN])
     work = work[work[TARGET_COLUMN] > 0]
-    for col in FEATURE_COLUMNS:
+    for col in CAT_FEATURES:
         work[col] = work[col].fillna("unknown").astype(str).str.strip()
         work.loc[work[col] == "", col] = "unknown"
+    work["initial_price"] = pd.to_numeric(work["initial_price"], errors="coerce")
     X = work[FEATURE_COLUMNS]
     y = work[TARGET_COLUMN]
     return X, y

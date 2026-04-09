@@ -3,7 +3,7 @@
 Predict sold price from brand, item type, and condition using the trained RF pipeline.
 
 Usage (from repo root):
-  python scripts/predict_price_rf.py --brand "Nike" --item-type sneaker --condition new
+  python scripts/predict_price_rf.py --brand "Nike" --item-type sneaker --condition new --initial-price 185
 
 Requires models/ebay_price_rf.joblib from scripts/train_price_rf.py
 """
@@ -26,6 +26,12 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--brand", required=True, help="brand_name (e.g. Nike, Levi's, Unknown)")
     p.add_argument("--item-type", required=True, dest="item_type", help="item_type (e.g. sneaker, hoodie)")
     p.add_argument("--condition", required=True, help="normalized condition (e.g. new, used)")
+    p.add_argument(
+        "--initial-price",
+        type=float,
+        default=None,
+        help="Retail MSRP from catalog if known; omit so the pipeline imputes like missing training rows.",
+    )
     return p.parse_args()
 
 
@@ -44,6 +50,9 @@ def main() -> None:
                 "brand_name": args.brand.strip() or "unknown",
                 "item_type": args.item_type.strip() or "unknown",
                 "condition": args.condition.strip() or "unknown",
+                "initial_price": float("nan")
+                if args.initial_price is None
+                else float(args.initial_price),
             }
         ]
     )

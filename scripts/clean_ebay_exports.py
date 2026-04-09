@@ -28,6 +28,29 @@ ITEM_TYPE_PATTERNS: list[tuple[str, str]] = [
     (r"\bsunglasses|glasses|eyewear\b", "eyewear"),
 ]
 
+# clothing.csv Category -> cleaned item_type values (for retail-catalog alignment).
+CATEGORY_ITEM_TYPES: dict[str, frozenset[str]] = {
+    "Tops": frozenset({"tshirt"}),
+    "Knitwear": frozenset({"sweater"}),
+    "Sweatshirts": frozenset({"hoodie"}),
+    "Denim": frozenset({"jeans"}),
+    "Pants": frozenset({"pants"}),
+    "Shorts": frozenset({"shorts"}),
+    "Swimwear": frozenset(),
+    "Outerwear": frozenset({"jacket"}),
+    "Suiting": frozenset({"jacket"}),
+    "Shirts": frozenset({"tshirt"}),
+    "Dresses": frozenset({"dress"}),
+    "Skirts": frozenset({"skirt"}),
+    "Activewear": frozenset({"leggings", "pants", "tshirt", "shorts", "other"}),
+    "Socks": frozenset({"other"}),
+    "Accessories": frozenset({"belt", "headwear", "bag", "other"}),
+    "Bags": frozenset({"bag"}),
+    "Shoes": frozenset({"sneaker", "footwear", "other"}),
+}
+
+INITIAL_PRICE_MATCH_THRESHOLD = 0.42
+
 # Alias text in titles -> canonical brand names in brands.csv.
 BRAND_ALIASES: dict[str, list[str]] = {
     "Nike": ["air jordan", "jordan", "jumpman", 'jordans'],
@@ -89,7 +112,7 @@ def extract_brand(title: str, query: str, brand_patterns: list[tuple[str, re.Pat
                 brand = brand_name
                 return brand
     return brand
-        
+ 
 
 
 def extract_item_type(title: str) -> str:
@@ -113,6 +136,140 @@ def normalize_condition(value: object) -> str:
     if "refurbished" in text:
         return "refurbished"
     return "other"
+
+
+def resolve_clothing_csv(data_dir: Path) -> Path | None:
+    for candidate in (data_dir / "clothing.csv", data_dir.parent / "clothing.csv"):
+        if candidate.exists():
+            return candidate
+    return None
+
+
+def load_clothing_catalog(path: Path) -> pd.DataFrame:
+    df = pd.read_csv(path)
+    required = {"Item", "Brand", "Category", "Price_USD"}
+    if not required.issubset(df.columns):
+        raise ValueError(f"clothing.csv must have columns {sorted(required)}; got {list(df.columns)}")
+    df = df.copy()
+    df["Price_USD"] = pd.to_numeric(df["Price_USD"], errors="coerce")
+    df = df.dropna(subset=["Price_USD"])
+    df["Item"] = df["Item"].fillna("").astype(str).str.strip()
+    df["Brand"] = df["Brand"].fillna("").astype(str).str.strip()
+    df["Category"] = df["Category"].fillna("").astype(str).str.strip()
+    return df
+
+
+def _normalize_brand_key(value: str) -> str:
+    return normalize_text(value).replace("'", "")
+
+
+def brand_match_score(listing_brand: str, catalog_brand: str) -> float:
+    a = _normalize_brand_key(listing_brand)
+    b = _normalize_brand_key(catalog_brand)
+    if not b:
+        return 0.0
+    if not a or a == "unknown":
+        return 0.0
+    if a == b:
+        return 1.0
+    if a in b or b in a:
+        return 0.88
+    ta = {t for t in a.split() if len(t) > 1}
+    tb = {t for t in b.split() if len(t) > 1}
+    if not ta or not tb:
+        return 0.0
+    inter = ta & tb
+    if not inter:
+        return 0.0
+    return float(min(0.82, len(inter) / max(len(ta), len(tb))))
+
+
+def category_match_score(item_type: str, category: str) -> float:
+    allowed = CATEGORY_ITEM_TYPES.get(category)
+    if allowed is None:
+        return 0.35
+    if allowed is not None and len(allowed) == 0:
+        return 0.55
+    if item_type in allowed:
+        return 1.0
+    return 0.22
+
+
+def item_title_overlap_score(listing_title_norm: str, catalog_item_norm: str) -> float:
+    words = [w for w in catalog_item_norm.split() if len(w) > 2]
+    if not words:
+        return 0.0
+    hits = sum(1 for w in words if w in listing_title_norm)
+    return hits / len(words)
+
+
+def best_initial_price_match(
+    title: str,
+    brand_name: str,
+    item_type: str,
+    catalog: pd.DataFrame,
+) -> tuple[float | None, float, str | None]:
+    title_n = normalize_text(title)
+    best_price: float | None = None
+    best_score = -1.0
+    best_item: str | None = None
+
+    for _idx, row in catalog.iterrows():
+        cat_item = normalize_text(str(row["Item"]))
+        cat_brand = str(row["Brand"])
+        cat_category = str(row["Category"])
+        br = brand_match_score(brand_name, cat_brand)
+        ct = category_match_score(item_type, cat_category)
+        ov = item_title_overlap_score(title_n, cat_item)
+
+        if br > 0:
+            total = 0.48 * br + 0.32 * ct + 0.28 * ov
+        else:
+            total = 0.58 * ct + 0.42 * ov
+            brand_tokens = [
+                w for w in _normalize_brand_key(cat_brand).split() if len(w) > 2
+            ]
+            if brand_tokens and not any(w in title_n for w in brand_tokens):
+                total *= 0.55
+
+        if total > best_score:
+            best_score = total
+            best_price = float(row["Price_USD"])
+            best_item = str(row["Item"])
+
+    if best_score < INITIAL_PRICE_MATCH_THRESHOLD:
+        return None, best_score, best_item
+    return best_price, best_score, best_item
+
+
+def attach_initial_prices(cleaned: pd.DataFrame, clothing_path: Path | None) -> pd.DataFrame:
+    if clothing_path is None:
+        cleaned["initial_price"] = pd.NA
+        cleaned["initial_price_catalog_item"] = pd.NA
+        return cleaned
+
+    catalog = load_clothing_catalog(clothing_path)
+    prices: list[float] = []
+    scores: list[float] = []
+    items: list[str | None] = []
+
+    for title, brand, itype in zip(
+        cleaned["title"].tolist(),
+        cleaned["brand_name"].tolist(),
+        cleaned["item_type"].tolist(),
+        strict=True,
+    ):
+        price, score, cat_item = best_initial_price_match(
+            str(title), str(brand), str(itype), catalog
+        )
+        prices.append(float("nan") if price is None else float(price))
+        scores.append(float(score))
+        items.append(cat_item)
+
+    cleaned = cleaned.copy()
+    cleaned["initial_price"] = prices
+    cleaned["initial_price_catalog_item"] = items
+    return cleaned
 
 
 def clean_price_column(df: pd.DataFrame) -> pd.Series:
@@ -162,7 +319,7 @@ def load_source_frames(csv_paths: list[Path]) -> pd.DataFrame:
     return pd.concat(frames, ignore_index=True)
 
 
-def clean_dataset(data_dir: Path) -> pd.DataFrame:
+def clean_dataset(data_dir: Path, clothing_csv: Path | None = None) -> pd.DataFrame:
     brand_csv_path = data_dir / "brands.csv"
     brands = load_brands(brand_csv_path)
     brand_patterns: list[tuple[str, re.Pattern[str]]] = []
@@ -186,7 +343,7 @@ def clean_dataset(data_dir: Path) -> pd.DataFrame:
             "brand_name": [
                 extract_brand(t, q, brand_patterns) for t, q in zip(raw["title"], raw["query"])
             ],
-            "item_type": [extract_item_type(t) for t in zip(raw["title"])],
+            "item_type": [extract_item_type(t) for t in raw["title"]],
             "price": clean_price_column(raw),
             "condition": raw["condition_text"].map(normalize_condition),
             "sold_date_text": raw.get("sold_date_text"),
@@ -199,6 +356,13 @@ def clean_dataset(data_dir: Path) -> pd.DataFrame:
     cleaned = cleaned.dropna(subset=["title"], how="any")
     cleaned = cleaned[cleaned["title"].str.len() > 0]
     cleaned = cleaned.drop_duplicates(subset=["item_id", "title", "price"], keep="first")
+    if clothing_csv is not None:
+        clothing_path = clothing_csv.expanduser().resolve()
+        if not clothing_path.is_file():
+            raise FileNotFoundError(f"clothing catalog not found: {clothing_path}")
+    else:
+        clothing_path = resolve_clothing_csv(data_dir)
+    cleaned = attach_initial_prices(cleaned, clothing_path)
     cleaned = cleaned.sort_values(by="scraped_at_utc", ascending=False, na_position="last")
     cleaned.reset_index(drop=True, inplace=True)
     return cleaned
@@ -240,15 +404,31 @@ def parse_args() -> argparse.Namespace:
         default=Path("ebay_historical_clothing_scraper/data/processed/ebay_cleaned.db"),
         help="SQLite file path for cleaned table storage.",
     )
+    parser.add_argument(
+        "--clothing-csv",
+        type=Path,
+        default=None,
+        help="Retail catalog CSV (Item, Brand, Category, Price_USD). Defaults to data/clothing.csv or ../clothing.csv.",
+    )
     return parser.parse_args()
 
 
 def main() -> None:
     args = parse_args()
-    cleaned_df = clean_dataset(args.data_dir)
+    clothing_arg = args.clothing_csv
+    if clothing_arg is not None:
+        clothing_arg = (
+            clothing_arg.expanduser().resolve()
+            if clothing_arg.is_absolute()
+            else (Path.cwd() / clothing_arg).resolve()
+        )
+    cleaned_df = clean_dataset(args.data_dir, clothing_csv=clothing_arg)
     write_outputs(cleaned_df, args.output_dir, args.sqlite_path)
 
     print(f"Rows cleaned: {len(cleaned_df):,}")
+    if "initial_price" in cleaned_df.columns:
+        with_msrp = int(pd.Series(cleaned_df["initial_price"]).notna().sum())
+        print(f"Rows with initial_price (retail match): {with_msrp:,}")
     print("Output files:")
     print(f"- {args.output_dir / 'ebay_historical_cleaned.csv'}")
     print(f"- {args.output_dir / 'ebay_historical_cleaned.parquet'}")
