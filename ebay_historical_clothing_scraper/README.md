@@ -53,6 +53,8 @@ PYTHONPATH=src python -m ebay_scraper.runner
 PYTHONPATH=src python -m ebay_scraper.schedule_daily
 ```
 
+If `clothing.csv` is present in the project root (columns `Item`, `Brand`, …), each scheduled run uses the next **5** rows (configurable with `CLOTHING_ITEMS_PER_RUN`) as search queries, built as `"{Brand} {Item}"`. Progress is stored in `data/clothing_scrape_cursor.txt` so the next run continues through the file and wraps. Set `EBAY_USE_CLOTHING_CATALOG=0` in `.env` to keep using only `EBAY_QUERIES`.
+
 Default schedule is `02:00` (24-hour local time). Change it in `.env` with:
 
 - `SCHEDULE_HOUR=2`

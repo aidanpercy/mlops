@@ -10,6 +10,9 @@ from dotenv import load_dotenv
 @dataclass(frozen=True)
 class Settings:
     queries: list[str]
+    clothing_csv: Path | None
+    clothing_items_per_run: int
+    clothing_cursor_path: Path
     ebay_domain: str
     ebay_location: str
     max_pages_per_query: int
@@ -51,8 +54,35 @@ def load_settings() -> Settings:
             p = project_root / p
         cookies_file = p
 
+    use_catalog = os.getenv("EBAY_USE_CLOTHING_CATALOG", "1").strip().lower() not in (
+        "0",
+        "false",
+        "no",
+    )
+    clothing_csv: Path | None = None
+    catalog_raw = os.getenv("CLOTHING_CSV", "").strip()
+    if use_catalog:
+        if catalog_raw:
+            cp = Path(catalog_raw).expanduser()
+            clothing_csv = cp if cp.is_absolute() else project_root / cp
+            if not clothing_csv.is_file():
+                clothing_csv = None
+        else:
+            default_csv = project_root / "clothing.csv"
+            if default_csv.is_file():
+                clothing_csv = default_csv
+
+    clothing_items_per_run = max(
+        1,
+        int(os.getenv("CLOTHING_ITEMS_PER_RUN", "5")),
+    )
+    clothing_cursor_path = project_root / "data" / "clothing_scrape_cursor.txt"
+
     return Settings(
         queries=queries,
+        clothing_csv=clothing_csv,
+        clothing_items_per_run=clothing_items_per_run,
+        clothing_cursor_path=clothing_cursor_path,
         ebay_domain=os.getenv("EBAY_DOMAIN", "www.ebay.com"),
         ebay_location=os.getenv("EBAY_LOCATION", "1"),
         max_pages_per_query=int(os.getenv("MAX_PAGES_PER_QUERY", "3")),

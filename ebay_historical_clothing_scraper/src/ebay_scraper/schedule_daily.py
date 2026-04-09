@@ -29,12 +29,21 @@ def run_daily_forever() -> None:
 
         try:
             result = run_once()
+            extra = ""
+            if result.get("clothing_catalog"):
+                extra = (
+                    f" | clothing_csv batch "
+                    f"start_idx={result['clothing_catalog_start_index']} "
+                    f"next_cursor={result['clothing_catalog_next_cursor']}"
+                )
             print(
                 "Run complete | "
                 f"fetched={result['fetched']} "
                 f"inserted_new={result['inserted_new']} "
                 f"duplicates_ignored={result['duplicates_ignored']}"
+                f"{extra}"
             )
+            print("Queries: " + "; ".join(result["queries"]))
         except Exception as exc:
             print(f"Run failed: {exc}")
 
