@@ -10,17 +10,17 @@ import pandas as pd
 
 ITEM_TYPE_PATTERNS: list[tuple[str, str]] = [
     (r"\bhoodie|sweatshirt|pullover\b", "hoodie"),
-    (r"\bt[\-\s]?shirt|tee\b", "tshirt"),
+    (r"\bt[\-\s]?shirt|tee|tshirt|t-shirt\b", "tshirt"),
     (r"\bjeans|jean\b", "jeans"),
     (r"\bshorts\b", "shorts"),
-    (r"\bdress\b", "dress"),
+    (r"\bdress|gown|shirtdress\b", "dress"),
     (r"\bskirt\b", "skirt"),
     (r"\bleggings\b", "leggings"),
     (r"\bjacket|coat|blazer|parka|windbreaker|puffer|peacoat|bomber|vest\b", "jacket"),
     (r"\bsweater|cardigan\b", "sweater"),
     (r"\bpants|trousers|joggers\b", "pants"),
-    (r"\bboot|boots|sandal|sandals|loafer|loafers|heel|heels\b", "footwear"),
-    (r"\bsneaker|sneakers|jordans|jordan|air|air jordan|running\b", "sneaker"),
+    (r"\bboot|boots|sandal|sandals|loafer|loafers|heel|heels|slides|clog|clogs\b", "footwear"),
+    (r"\bsneaker|sneakers|jordans|jordan|air jordan|running|dunk|dunks|air max|air force\b", "sneaker"),
     (r"\bbag|handbag|tote|backpack|wallet|purse|satchel|crossbody|clutch|waistbag\b", "bag"),
     (r"\bhat|cap|beanie\b", "headwear"),
     (r"\bbelt\b", "belt"),
@@ -32,7 +32,7 @@ ITEM_TYPE_PATTERNS: list[tuple[str, str]] = [
 BRAND_ALIASES: dict[str, list[str]] = {
     "Nike": ["air jordan", "jordan", "jumpman", 'jordans'],
     "Levi's": ["levis", "levi"],
-    "Fear of God": ["essentials", "fog"],
+    "Fear of God": ["essentials", "fog", "fear of gods"],
     "The North Face": ["north face", "tnf"],
     "Louis Vuitton": ["lv", "louis vuitton"],
     "Saint Laurent": ["ysl", "saint laurent"],
@@ -76,16 +76,24 @@ def build_brand_regex(brand: str) -> re.Pattern[str]:
     return re.compile(rf"(?<!\w){escaped}(?!\w)", flags=re.IGNORECASE)
 
 
-def extract_brand(title: str, brand_patterns: list[tuple[str, re.Pattern[str]]]) -> str:
+def extract_brand(title: str, query: str, brand_patterns: list[tuple[str, re.Pattern[str]]]) -> str:
     search_text = title.strip()
+    brand = "unknown"
     for brand_name, pattern in brand_patterns:
         if pattern.search(search_text):
-            return brand_name
-    return "Unknown"
+            brand = brand_name
+            return brand
+    if brand == "unknown":
+        for brand_name, pattern in brand_patterns:
+            if pattern.search(query):
+                brand = brand_name
+                return brand
+    return brand
+        
 
 
-def extract_item_type(title: str, query: str) -> str:
-    search_text = f"{title} {query}".lower()
+def extract_item_type(title: str) -> str:
+    search_text = f"{title}".lower()
     for pattern, item_type in ITEM_TYPE_PATTERNS:
         if re.search(pattern, search_text):
             return item_type
@@ -176,16 +184,15 @@ def clean_dataset(data_dir: Path) -> pd.DataFrame:
             "title": raw["title"],
             "query": raw["query"],
             "brand_name": [
-                extract_brand(t, brand_patterns) for t in raw["title"]
+                extract_brand(t, q, brand_patterns) for t, q in zip(raw["title"], raw["query"])
             ],
-            "item_type": [extract_item_type(t, q) for t, q in zip(raw["title"], raw["query"])],
+            "item_type": [extract_item_type(t) for t in zip(raw["title"])],
             "price": clean_price_column(raw),
             "condition": raw["condition_text"].map(normalize_condition),
+            "sold_date_text": raw.get("sold_date_text"),
             "condition_raw": raw["condition_text"],
             "item_url": raw.get("item_url"),
-            "sold_date_text": raw.get("sold_date_text"),
-            "scraped_at_utc": raw.get("scraped_at_utc"),
-            "source_file": raw["source_file"],
+            "scraped_at_utc": raw.get("scraped_at_utc")
         }
     )
 
