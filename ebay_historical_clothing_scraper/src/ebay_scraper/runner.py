@@ -33,26 +33,26 @@ def run_once() -> dict:
     total_fetched = 0
     all_listings: list[EbayListing] = []
     try:
-        for query in queries:
+        for query in settings.queries:
             listings = list(client.fetch_sold_listings(query=query))
             total_fetched += len(listings)
             all_listings.extend(listings)
 
         inserted = storage.save_listings(all_listings)
         csv_path = storage.export_all_to_csv(settings.export_dir)
-        cleaner_script = (
-            Path(__file__).resolve().parents[3] / "scripts" / "clean_ebay_exports.py"
-        )
-        subprocess.run(
-            [sys.executable, str(cleaner_script)],
-            check=True,
-        )
+        # cleaner_script = (
+        #     Path(__file__).resolve().parents[3] / "scripts" / "clean_ebay_exports.py"
+        # )
+        # subprocess.run(
+        #     [sys.executable, str(cleaner_script)],
+        #     check=True,
+        # )x
         total_stored = total_fetched - inserted
         return {
-            "queries": queries,
-            "clothing_catalog": bool(settings.clothing_csv),
-            "clothing_catalog_start_index": catalog_start,
-            "clothing_catalog_next_cursor": catalog_next,
+            "queries": settings.queries,
+            # "clothing_catalog": bool(settings.clothing_csv),
+            # "clothing_catalog_start_index": catalog_start,
+            # "clothing_catalog_next_cursor": catalog_next,
             "fetched": total_fetched,
             "inserted_new": inserted,
             "duplicates_ignored": total_stored,
@@ -70,12 +70,12 @@ if __name__ == "__main__":
         print(err, file=sys.stderr)
         raise SystemExit(1) from err
     print("Run complete")
-    if result.get("clothing_catalog"):
-        print(
-            f"Clothing catalog batch "
-            f"(start_idx={result['clothing_catalog_start_index']}, "
-            f"next_cursor={result['clothing_catalog_next_cursor']})"
-        )
+    # if result.get("clothing_catalog"):
+    #     print(
+    #         f"Clothing catalog batch "
+    #         f"(start_idx={result['clothing_catalog_start_index']}, "
+    #         f"next_cursor={result['clothing_catalog_next_cursor']})"
+    #     )
     print(f"Queries: {', '.join(result['queries'])}")
     print(f"Fetched: {result['fetched']}")
     print(f"Inserted new: {result['inserted_new']}")

@@ -13,6 +13,9 @@ class Settings:
     clothing_csv: Path | None
     clothing_items_per_run: int
     clothing_cursor_path: Path
+    github_push_enabled: bool
+    github_push_remote: str
+    github_push_branch: str
     ebay_domain: str
     ebay_location: str
     max_pages_per_query: int
@@ -77,12 +80,22 @@ def load_settings() -> Settings:
         int(os.getenv("CLOTHING_ITEMS_PER_RUN", "5")),
     )
     clothing_cursor_path = project_root / "data" / "clothing_scrape_cursor.txt"
+    github_push_enabled = os.getenv("GITHUB_PUSH_EXPORTS", "0").strip().lower() in (
+        "1",
+        "true",
+        "yes",
+    )
+    github_push_remote = os.getenv("GITHUB_PUSH_REMOTE", "origin").strip() or "origin"
+    github_push_branch = os.getenv("GITHUB_PUSH_BRANCH", "main").strip() or "main"
 
     return Settings(
         queries=queries,
         clothing_csv=clothing_csv,
         clothing_items_per_run=clothing_items_per_run,
         clothing_cursor_path=clothing_cursor_path,
+        github_push_enabled=github_push_enabled,
+        github_push_remote=github_push_remote,
+        github_push_branch=github_push_branch,
         ebay_domain=os.getenv("EBAY_DOMAIN", "www.ebay.com"),
         ebay_location=os.getenv("EBAY_LOCATION", "1"),
         max_pages_per_query=int(os.getenv("MAX_PAGES_PER_QUERY", "3")),

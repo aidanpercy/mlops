@@ -2,8 +2,10 @@ from __future__ import annotations
 
 import time
 from datetime import datetime, timedelta
+from pathlib import Path
 
 from .config import load_settings
+from .github_sync import commit_and_push_csv_export
 from .runner import run_once
 
 
@@ -44,6 +46,21 @@ def run_daily_forever() -> None:
                 f"{extra}"
             )
             print("Queries: " + "; ".join(result["queries"]))
+            if settings.github_push_enabled:
+                try:
+                    status = commit_and_push_csv_export(
+                        csv_path=Path(result["csv_path"]),
+                        remote=settings.github_push_remote,
+                        branch=settings.github_push_branch,
+                    )
+                    print(
+                        "GitHub export sync complete | "
+                        f"status={status} "
+                        f"remote={settings.github_push_remote} "
+                        f"branch={settings.github_push_branch}"
+                    )
+                except Exception as push_exc:
+                    print(f"GitHub export sync failed: {push_exc}")
         except Exception as exc:
             print(f"Run failed: {exc}")
 
