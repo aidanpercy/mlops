@@ -1,0 +1,31 @@
+name: Extract features from MongoDB
+
+on:
+  schedule:
+    # cron is UTC. These four cover ~every 6 hours.
+    - cron: "5 0,6,12,18 * * *"
+  workflow_dispatch: {}
+
+jobs:
+  extract:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: "pip"
+
+      - run: pip install -r requirements.txt
+
+      - name: Run extractor
+        env:
+          NVIDIA_API_KEY: ${{ secrets.NVIDIA_API_KEY }}
+          MONGODB_URI: ${{ secrets.MONGODB_URI }}
+          MONGODB_DATABASE: historical
+          MONGODB_SOURCE_COLL: raw
+          MONGODB_TARGET_COLL: parsed
+        run: |
+          python scripts/extract_features_from_mongo.py --limit 100 --delay 5
