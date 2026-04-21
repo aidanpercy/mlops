@@ -2,7 +2,7 @@
 beautifulsoup4>=4.12
 
 # Experiment tracking & model registry
-mlflow>=2.10,<3
+mlflow==3.6.0
 
 # Data / modeling (use when eBay data pipeline is ready)
 pandas>=2.0
@@ -12,8 +12,12 @@ scikit-learn==1.7.2
 # API service
 fastapi>=0.115,<1
 httpx>=0.27,<1
-requests>=2.31,<3
+requests==2.32.5
 uvicorn>=0.30,<1
 
 # Optional: load API keys from .env later
-python-dotenv>=1.0
+python-dotenv===1.1.0
+
+# MongoDB client for pulling source documents
+pymongo==4.17.0
+certifi>=2024.2.2

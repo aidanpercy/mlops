@@ -59,5 +59,6 @@ def commit_and_push_csv_export(
     stamp = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC")
     message = f"chore(data): add nightly ebay export {stamp}"
     _run_git(repo_root, ["commit", "-m", message, "--", str(relative_csv)])
+    _run_git(repo_root, ["pull", "--rebase", remote, branch])
     _run_git(repo_root, ["push", remote, f"HEAD:{branch}"])
     return "pushed"

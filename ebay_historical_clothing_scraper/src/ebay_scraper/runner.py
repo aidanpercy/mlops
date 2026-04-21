@@ -33,7 +33,7 @@ def run_once() -> dict:
     total_fetched = 0
     all_listings: list[EbayListing] = []
     try:
-        for query in settings.queries:
+        for query in queries:
             listings = list(client.fetch_sold_listings(query=query))
             total_fetched += len(listings)
             all_listings.extend(listings)
@@ -49,7 +49,7 @@ def run_once() -> dict:
         # )x
         total_stored = total_fetched - inserted
         return {
-            "queries": settings.queries,
+            "queries": queries,
             # "clothing_catalog": bool(settings.clothing_csv),
             # "clothing_catalog_start_index": catalog_start,
             # "clothing_catalog_next_cursor": catalog_next,

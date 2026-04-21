@@ -65,15 +65,20 @@ def load_settings() -> Settings:
     clothing_csv: Path | None = None
     catalog_raw = os.getenv("CLOTHING_CSV", "").strip()
     if use_catalog:
+        # Try explicit path first; if invalid, fall back to default catalog paths.
         if catalog_raw:
             cp = Path(catalog_raw).expanduser()
-            clothing_csv = cp if cp.is_absolute() else project_root / cp
-            if not clothing_csv.is_file():
-                clothing_csv = None
-        else:
-            default_csv = project_root / "clothing.csv"
-            if default_csv.is_file():
-                clothing_csv = default_csv
+            candidates = [cp] if cp.is_absolute() else [project_root / cp, Path.cwd() / cp]
+            for candidate in candidates:
+                if candidate.is_file():
+                    clothing_csv = candidate
+                    break
+
+        if clothing_csv is None:
+            for candidate in (project_root / "clothing.csv", project_root / "data" / "clothing.csv"):
+                if candidate.is_file():
+                    clothing_csv = candidate
+                    break
 
     clothing_items_per_run = max(
         1,

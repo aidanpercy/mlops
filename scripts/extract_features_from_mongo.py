@@ -39,8 +39,6 @@ from pymongo.errors import PyMongoError
 import certifi
 import pandas as pd
 
-DEFAULT_MONGODB_URI = "mongodb+srv://service_account:service_account@ebay-cluster.gkxnmxj.mongodb.net/"
-
 DEFAULT_DATABASE = "historical"
 DEFAULT_SOURCE_COLLECTION = "raw"
 DEFAULT_MODEL = "meta/llama-3.3-70b-instruct"
@@ -48,7 +46,7 @@ DEFAULT_LIMIT = 100
 
 NVIDIA_BASE_URL = "https://integrate.api.nvidia.com/v1"
 REQUEST_TIMEOUT_SECONDS = 120
-INTER_REQUEST_DELAY_SECONDS = 2.5
+INTER_REQUEST_DELAY_SECONDS = 5
 
 FEATURE_KEYS = [
     "brand_name",
@@ -417,7 +415,7 @@ def main() -> int:
 
     api_key = os.getenv("NVIDIA_API_KEY", "").strip()
     model = os.getenv("NVIDIA_MODEL", DEFAULT_MODEL).strip() or DEFAULT_MODEL
-    mongodb_uri = os.getenv("MONGODB_URI", DEFAULT_MONGODB_URI).strip() or DEFAULT_MONGODB_URI
+    mongodb_uri = os.getenv("MONGODB_URI", None).strip()
     database = os.getenv("MONGODB_DATABASE", DEFAULT_DATABASE).strip() or DEFAULT_DATABASE
     source_collection = (
         os.getenv("MONGODB_SOURCE_COLL", DEFAULT_SOURCE_COLLECTION).strip()
@@ -471,6 +469,7 @@ def main() -> int:
 
         try:
             messages = build_messages(cleaned_doc)
+            time.sleep(INTER_REQUEST_DELAY_SECONDS)
             payload = call_nvidia_chat(api_key=api_key, model=model, messages=messages)
             content = payload["choices"][0]["message"]["content"]
             features = parse_llm_json(content)
