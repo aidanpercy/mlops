@@ -28,4 +28,4 @@ jobs:
           MONGODB_SOURCE_COLL: raw
           MONGODB_TARGET_COLL: parsed
         run: |
-          python scripts/extract_features_from_mongo.py --limit 100 --delay 5
+          python scripts/extract_features_from_mongo.py --limit 200 --delay 5
