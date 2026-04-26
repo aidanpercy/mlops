@@ -22,9 +22,10 @@ python3 -m venv venv
 source venv/bin/activate
 pip install -U pip
 pip install -e .
-python scripts/build_sample_dataset.py
-python scripts/train_model.py
-export MLFLOW_SERVING_MODEL_URI="models:/clothing-value-model/latest"
+export GOOGLE_CLOUD_PROJECT="your-gcp-project-id"
+export GOOGLE_CLOUD_LOCATION="global"
+export GOOGLE_GENAI_USE_VERTEXAI=True
+export VERTEX_AI_MODEL="gemini-2.5-flash"
 uvicorn clothing_mlops.service:app --reload
 ```
 
@@ -33,9 +34,10 @@ Docker:
 ```bash
 docker build -t clothing-value-api .
 docker run -p 8000:8000 \
-  -v "$(pwd)/mlruns:/app/mlruns" \
-  -e MLFLOW_TRACKING_URI="file:/app/mlruns" \
-  -e MLFLOW_SERVING_MODEL_URI="models:/clothing-value-model/latest" \
+  -e GOOGLE_CLOUD_PROJECT="your-gcp-project-id" \
+  -e GOOGLE_CLOUD_LOCATION="global" \
+  -e GOOGLE_GENAI_USE_VERTEXAI="True" \
+  -e VERTEX_AI_MODEL="gemini-2.5-flash" \
   clothing-value-api
 ```
 
@@ -45,14 +47,8 @@ Request:
 
 ```json
 {
-  "brand": "Patagonia",
-  "category": "Jacket",
-  "size": "M",
-  "condition": "used_very_good",
-  "color": "Blue",
-  "material": "Polyester",
-  "listing_price": 129.0,
-  "shipping_price": 12.5
+  "description": "Patagonia Synchilla fleece pullover in navy, men's medium, lightly worn with no stains or holes.",
+  "retail_price": 139.0
 }
 ```
 
@@ -60,7 +56,16 @@ Response:
 
 ```json
 {
-  "predicted_sale_price": 126.13,
-  "model_status": "ok"
+  "description": "Patagonia Synchilla fleece pullover in navy, men's medium, lightly worn with no stains or holes.",
+  "retail_price": 139.0,
+  "item_summary": "Patagonia Synchilla fleece pullover in navy, men's medium, lightly worn with no stains or holes.",
+  "prices": {
+    "like_new": 110.0,
+    "good": 93.0,
+    "used": 69.0
+  },
+  "provider": "vertex_ai",
+  "model": "gemini-2.5-flash",
+  "confidence_notes": "Pricing reflects inferred resale positioning for this category and brand."
 }
 ```

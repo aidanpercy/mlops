@@ -1,52 +1,52 @@
-"""FastAPI service for the Spiffy web UI and model-backed API routes."""
+"""FastAPI service for the Spiffy UI and Vertex AI-backed pricing routes."""
 
 from __future__ import annotations
 
 import json
-from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-import pandas as pd
+from dotenv import load_dotenv
 from fastapi import FastAPI
 from fastapi.responses import HTMLResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
-from clothing_mlops.data_pipeline import prediction_example
-from clothing_mlops.mlflow_setup import set_experiment
-from clothing_mlops.modeling import load_serving_model
+from clothing_mlops.data_pipeline import pricing_request_example
+from clothing_mlops.vertex_pricing import PricingResult, build_pricing_backend
 
+
+load_dotenv()
 
 ITEM_CATALOG = [
     {
         "name": "Supreme 20th Anniversary Box Logo Tee",
         "tag": "Archive tee",
-        "description": "A landmark streetwear graphic tee with strong collector appeal and simple everyday wearability.",
+        "description": "2000s-era Supreme box logo t-shirt, size large, bright red cotton, light wear with no cracking.",
         "image": "/static/images/supreme.webp",
     },
     {
         "name": "Levi's Women’s 501",
         "tag": "Denim staple",
-        "description": "Classic straight-leg denim with broad demand, durable fabric, and a long resale shelf life.",
+        "description": "Levi's 501 jeans, women's 27, medium wash, broken-in denim, clean hems, gently worn.",
         "image": "/static/images/levis.avif",
     },
     {
         "name": "Balenciaga City Bag",
         "tag": "Designer bag",
-        "description": "A soft leather icon from the early luxury handbag wave, driven by brand recognition and condition.",
+        "description": "Balenciaga City bag in black leather with silver hardware, soft slouch, minor corner wear.",
         "image": "/static/images/balenciaga.jpg",
     },
     {
-        "name": "Air Jordan 4 “Military Black” (2022)",
+        "name": "Air Jordan 4 Military Black",
         "tag": "Sneaker release",
-        "description": "A widely recognized retro sneaker with steady demand from both collectors and casual buyers.",
+        "description": "Air Jordan 4 Military Black, size 10.5, 2022 release, worn a handful of times with clean uppers.",
         "image": "/static/images/jordans.avif",
     },
     {
         "name": "Fear of God Essentials Hoodie",
         "tag": "Premium basics",
-        "description": "A heavyweight basics piece with recognizable branding and a broad contemporary buyer base.",
+        "description": "Fear of God Essentials hoodie in oatmeal, men's medium, heavyweight fleece, minimal wear.",
         "image": "/static/images/foggg.jpeg",
     },
 ]
@@ -54,73 +54,50 @@ ITEM_CATALOG = [
 ITEM_OPTIONS = [item["name"] for item in ITEM_CATALOG]
 
 
-class PredictionRequest(BaseModel):
-    brand: str
-    category: str
-    size: str
-    condition: str
-    color: str
-    material: str
-    listing_price: float = Field(gt=0)
-    shipping_price: float = Field(ge=0)
+class PricingRequest(BaseModel):
+    description: str = Field(min_length=8, max_length=1200)
+    retail_price: float = Field(gt=0)
 
 
-class LifetimeCurveRequest(BaseModel):
-    item_name: str
-    purchase_price: float = Field(gt=0)
-
-
-@dataclass
-class PlaceholderModel:
-    """Fallback predictor used when the MLflow model is unavailable."""
-
-    def predict(self, frame: pd.DataFrame) -> list[float]:
-        totals = frame["listing_price"] + frame["shipping_price"]
-        return [round(float(value) * 0.87, 2) for value in totals]
-
-
-app = FastAPI(title="Spiffy", version="0.1.0")
-_serving_model: Any | None = None
-_model_loaded = False
+app = FastAPI(title="Spiffy", version="0.2.0")
+_pricing_backend = build_pricing_backend()
 
 STATIC_DIR = Path(__file__).resolve().parents[2] / "static"
 app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
 
 
-def refresh_model() -> None:
-    global _serving_model, _model_loaded
-
-    set_experiment()
-    model, status, _ = load_serving_model()
-    if status == "ok" and model is not None:
-        _serving_model = model
-        _model_loaded = True
-        return
-
-    _serving_model = PlaceholderModel()
-    _model_loaded = True
+def refresh_backend() -> None:
+    global _pricing_backend
+    _pricing_backend = build_pricing_backend()
 
 
 @app.on_event("startup")
 def _startup() -> None:
-    refresh_model()
+    refresh_backend()
 
 
-def _curve_points(purchase_price: float) -> list[dict[str, float | int | str]]:
-    depreciation_profile = [1.0, 0.88, 0.79, 0.71, 0.64, 0.58, 0.53]
-    return [
-        {
-            "month": index * 12,
-            "label": f"Year {index}",
-            "value": round(purchase_price * factor, 2),
-        }
-        for index, factor in enumerate(depreciation_profile)
-    ]
+def _result_payload(description: str, retail_price: float, result: PricingResult) -> dict[str, Any]:
+    payload: dict[str, Any] = {
+        "description": description,
+        "retail_price": retail_price,
+        "item_summary": result.item_summary,
+        "prices": {
+            "like_new": result.like_new,
+            "good": result.good,
+            "used": result.used,
+        },
+        "provider": result.provider,
+        "model": result.model,
+        "confidence_notes": result.confidence_notes,
+    }
+    if result.warning:
+        payload["warning"] = result.warning
+    return payload
 
 
 @app.get("/", response_class=HTMLResponse)
 def spiffy_home() -> str:
-    items_json = json.dumps(ITEM_CATALOG)
+    samples_json = json.dumps(ITEM_CATALOG)
     return f"""<!DOCTYPE html>
 <html lang="en">
   <head>
@@ -152,7 +129,7 @@ def spiffy_home() -> str:
         color: var(--ink);
         font-family: "Avenir Next", "Helvetica Neue", sans-serif;
         background:
-          radial-gradient(circle at top left, rgba(255, 255, 255, 0.45), transparent 30%),
+          radial-gradient(circle at top right, rgba(255, 255, 255, 0.5), transparent 24%),
           linear-gradient(180deg, #ece7e0 0%, var(--page) 100%);
       }}
 
@@ -161,14 +138,14 @@ def spiffy_home() -> str:
       }}
 
       .page {{
-        max-width: 1380px;
+        max-width: 1320px;
         margin: 0 auto;
-        padding: 22px;
+        padding: 20px;
       }}
 
       .stack {{
         display: grid;
-        gap: 14px;
+        gap: 16px;
       }}
 
       .band {{
@@ -181,27 +158,26 @@ def spiffy_home() -> str:
 
       .topbar {{
         display: flex;
-        align-items: center;
         justify-content: space-between;
-        gap: 16px;
+        align-items: center;
+        gap: 12px;
       }}
 
       .brand {{
         display: inline-flex;
         align-items: center;
         gap: 12px;
-        font-size: 1.7rem;
+        font-size: 1.8rem;
         font-weight: 800;
-        letter-spacing: -0.05em;
+        letter-spacing: -0.06em;
       }}
 
       .brand-mark {{
-        width: 40px;
-        height: 40px;
+        width: 42px;
+        height: 42px;
         border-radius: 14px;
         background: linear-gradient(145deg, var(--blue) 0%, #b9def3 100%);
         position: relative;
-        overflow: hidden;
       }}
 
       .brand-mark::before {{
@@ -209,26 +185,22 @@ def spiffy_home() -> str:
         position: absolute;
         inset: 9px;
         border-radius: 999px;
-        background: rgba(255,255,255,0.88);
+        background: rgba(255, 255, 255, 0.88);
       }}
 
-      .brand-note {{
+      .topbar-note {{
         color: var(--muted);
         font-size: 0.95rem;
-        white-space: nowrap;
       }}
 
-      .headline {{
+      .hero {{
+        display: block;
         background: var(--panel-alt);
-        display: flex;
-        align-items: center;
-        justify-content: space-between;
-        gap: 18px;
       }}
 
-      .headline-copy {{
+      .hero-copy {{
         display: grid;
-        gap: 10px;
+        gap: 12px;
       }}
 
       .eyebrow {{
@@ -243,42 +215,17 @@ def spiffy_home() -> str:
         text-transform: uppercase;
       }}
 
-      .headline h1 {{
-        font-size: clamp(2rem, 4vw, 3.2rem);
-        line-height: 0.96;
-        letter-spacing: -0.06em;
+      .hero h1 {{
+        font-size: clamp(2.1rem, 4.8vw, 4rem);
+        line-height: 0.94;
+        letter-spacing: -0.07em;
       }}
 
-      .headline p {{
+      .hero p {{
         color: var(--muted);
-        font-size: 1rem;
-        line-height: 1.45;
-      }}
-
-      .summary-chip {{
-        min-width: 180px;
-        padding: 16px 18px;
-        background: var(--card);
-        border: 1px solid var(--line);
-        border-radius: 22px;
-      }}
-
-      .summary-chip span {{
-        display: block;
-      }}
-
-      .summary-chip .label {{
-        color: var(--muted);
-        font-size: 0.78rem;
-        letter-spacing: 0.1em;
-        text-transform: uppercase;
-      }}
-
-      .summary-chip .value {{
-        margin-top: 8px;
-        font-size: 1.7rem;
-        font-weight: 800;
-        letter-spacing: -0.05em;
+        line-height: 1.55;
+        max-width: none;
+        white-space: nowrap;
       }}
 
       .section-title {{
@@ -286,162 +233,241 @@ def spiffy_home() -> str:
         letter-spacing: -0.05em;
       }}
 
-      .item-grid {{
+      .section-subtitle {{
+        margin-top: 8px;
+        color: var(--muted);
+        line-height: 1.45;
+      }}
+
+      .sample-grid {{
         display: grid;
         grid-template-columns: repeat(5, minmax(0, 1fr));
         gap: 14px;
-        margin-top: 16px;
+        margin-top: 18px;
       }}
 
-      .item-card {{
+      .sample-card {{
         appearance: none;
         width: 100%;
         text-align: left;
-        padding: 12px;
-        border-radius: 22px;
         border: 1px solid var(--line);
+        border-radius: 22px;
         background: var(--card);
+        padding: 12px;
         cursor: pointer;
-        transition: transform 160ms ease, border-color 160ms ease, box-shadow 160ms ease, background 160ms ease;
         display: grid;
         gap: 12px;
-        align-content: start;
+        transition: transform 160ms ease, box-shadow 160ms ease, border-color 160ms ease;
       }}
 
-      .item-card:hover,
-      .item-card:focus-visible {{
+      .sample-card:hover,
+      .sample-card:focus-visible {{
         transform: translateY(-2px);
-        border-color: rgba(79, 143, 183, 0.5);
         box-shadow: 0 14px 28px rgba(79, 143, 183, 0.12);
+        border-color: rgba(79, 143, 183, 0.5);
         outline: none;
       }}
 
-      .item-card.active {{
-        background: var(--blue-soft);
-        border-color: var(--blue-deep);
-        box-shadow: 0 14px 28px rgba(79, 143, 183, 0.16);
-      }}
-
-      .item-image {{
+      .sample-image {{
         width: 100%;
         aspect-ratio: 1 / 1;
         object-fit: contain;
         border-radius: 18px;
-        border: 1px solid rgba(21, 32, 43, 0.08);
-        background: #edf4f8;
-        padding: 10px;
+        background: #f5efe7;
+        border: 1px solid rgba(24, 33, 41, 0.08);
+        padding: 12px;
       }}
 
-      .item-meta {{
-        display: grid;
-        gap: 8px;
+      .sample-tag {{
+        display: inline-flex;
+        width: fit-content;
+        padding: 6px 10px;
+        border-radius: 999px;
+        background: var(--blue-soft);
+        font-size: 0.75rem;
+        font-weight: 700;
+        text-transform: uppercase;
+        letter-spacing: 0.08em;
       }}
 
-      .item-name {{
+      .sample-name {{
         font-size: 1rem;
-        line-height: 1.05;
         font-weight: 800;
         letter-spacing: -0.04em;
       }}
 
-      .item-description {{
+      .sample-description {{
         color: var(--muted);
-        font-size: 0.88rem;
+        font-size: 0.9rem;
         line-height: 1.45;
       }}
 
-      .price-row {{
+      .composer {{
+        display: grid;
+        gap: 14px;
+      }}
+
+      .retail-row {{
         display: flex;
         align-items: center;
-        gap: 16px;
+        gap: 12px;
         flex-wrap: wrap;
       }}
 
-      .price-row h3 {{
-        font-size: 1.45rem;
-        letter-spacing: -0.05em;
-      }}
-
-      .price-input {{
+      .retail-input {{
         display: inline-flex;
         align-items: center;
         gap: 10px;
-        min-width: 220px;
+        min-width: 230px;
         padding: 12px 16px;
         border-radius: 999px;
         border: 1px solid var(--line);
         background: var(--card);
       }}
 
-      .price-input span {{
-        font-size: 1.15rem;
+      .retail-input span {{
+        font-size: 1.1rem;
         font-weight: 800;
       }}
 
-      .price-input input {{
+      .retail-input input {{
         width: 100%;
         border: 0;
         outline: none;
         background: transparent;
         color: var(--ink);
-        font-size: 1.08rem;
+        font: inherit;
         font-weight: 700;
-        font-family: inherit;
       }}
 
-      .price-note {{
+      .composer textarea {{
+        width: 100%;
+        min-height: 180px;
+        resize: vertical;
+        border: 1px solid var(--line);
+        border-radius: 24px;
+        padding: 18px 20px;
+        font: inherit;
+        color: var(--ink);
+        background: var(--card);
+        outline: none;
+      }}
+
+      .composer textarea:focus {{
+        border-color: rgba(79, 143, 183, 0.55);
+        box-shadow: 0 0 0 4px rgba(223, 240, 251, 0.9);
+      }}
+
+      .composer-row {{
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        gap: 12px;
+        flex-wrap: wrap;
+      }}
+
+      .composer-note {{
         color: var(--muted);
         font-size: 0.94rem;
       }}
 
-      .chart-head {{
+      .action {{
+        appearance: none;
+        border: 0;
+        border-radius: 999px;
+        padding: 14px 20px;
+        background: var(--blue-deep);
+        color: white;
+        font: inherit;
+        font-weight: 800;
+        letter-spacing: -0.02em;
+        cursor: pointer;
+      }}
+
+      .action:disabled {{
+        cursor: wait;
+        opacity: 0.72;
+      }}
+
+      .results-head {{
         display: flex;
         justify-content: space-between;
         align-items: start;
         gap: 16px;
-        margin-bottom: 16px;
+        flex-wrap: wrap;
       }}
 
-      .chart-head h2 {{
-        font-size: 1.8rem;
-        line-height: 0.98;
-        letter-spacing: -0.06em;
-      }}
-
-      .chart-head p {{
-        margin-top: 8px;
+      .results-summary {{
         color: var(--muted);
-        line-height: 1.45;
+        line-height: 1.5;
+        margin-top: 8px;
       }}
 
-      .chart-box {{
-        background: var(--card);
+      .status-pill {{
+        display: inline-flex;
+        align-items: center;
+        gap: 8px;
+        padding: 9px 12px;
+        border-radius: 999px;
+        background: var(--blue-soft);
+        color: var(--blue-deep);
+        font-size: 0.82rem;
+        font-weight: 800;
+        letter-spacing: 0.06em;
+        text-transform: uppercase;
+      }}
+
+      .price-grid {{
+        display: grid;
+        grid-template-columns: repeat(3, minmax(0, 1fr));
+        gap: 14px;
+        margin-top: 18px;
+      }}
+
+      .price-card {{
         border: 1px solid var(--line);
         border-radius: 24px;
         padding: 18px;
+        background: var(--card);
       }}
 
-      .chart-summary {{
-        min-width: 170px;
-        padding: 16px 18px;
-        background: var(--panel-alt);
-        border-radius: 22px;
-        border: 1px solid rgba(79, 143, 183, 0.18);
-      }}
-
-      .chart-summary .label {{
+      .price-card .label {{
         color: var(--muted);
-        font-size: 0.76rem;
+        font-size: 0.78rem;
         text-transform: uppercase;
         letter-spacing: 0.1em;
       }}
 
-      .chart-summary .value {{
+      .price-card .value {{
         display: block;
-        margin-top: 8px;
-        font-size: 1.9rem;
+        margin-top: 10px;
+        font-size: clamp(2rem, 4vw, 2.7rem);
+        line-height: 0.92;
+        letter-spacing: -0.07em;
         font-weight: 800;
-        letter-spacing: -0.05em;
+      }}
+
+      .price-card p {{
+        margin-top: 10px;
+        color: var(--muted);
+        line-height: 1.5;
+      }}
+
+      .result-note {{
+        margin-top: 14px;
+        padding: 14px 16px;
+        border-radius: 18px;
+        background: linear-gradient(180deg, rgba(223, 240, 251, 0.6), rgba(255, 255, 255, 0.9));
+        color: var(--muted);
+        line-height: 1.5;
+      }}
+
+      .chart-wrap {{
+        margin-top: 18px;
+        border: 1px solid var(--line);
+        border-radius: 24px;
+        background: var(--card);
+        padding: 18px;
       }}
 
       .chart-svg {{
@@ -450,28 +476,18 @@ def spiffy_home() -> str:
         height: auto;
       }}
 
-      .empty {{
-        border-radius: 20px;
-        padding: 22px;
-        background: linear-gradient(180deg, rgba(142, 197, 230, 0.14), rgba(255,255,255,0.7));
-        color: var(--muted);
-        line-height: 1.5;
-      }}
-
-      @media (max-width: 1180px) {{
-        .item-grid {{
-          grid-template-columns: repeat(3, minmax(0, 1fr));
+      @media (max-width: 1120px) {{
+        .hero,
+        .sample-grid {{
+          grid-template-columns: repeat(2, minmax(0, 1fr));
         }}
       }}
 
       @media (max-width: 820px) {{
-        .headline,
-        .chart-head {{
-          flex-direction: column;
-        }}
-
-        .item-grid {{
-          grid-template-columns: repeat(2, minmax(0, 1fr));
+        .hero,
+        .sample-grid,
+        .price-grid {{
+          grid-template-columns: 1fr;
         }}
       }}
 
@@ -481,12 +497,8 @@ def spiffy_home() -> str:
         }}
 
         .topbar {{
-          flex-direction: column;
           align-items: start;
-        }}
-
-        .item-grid {{
-          grid-template-columns: 1fr;
+          flex-direction: column;
         }}
       }}
     </style>
@@ -501,62 +513,89 @@ def spiffy_home() -> str:
           </div>
         </section>
 
-        <section class="band headline">
-          <div class="headline-copy">
+        <section class="band hero">
+          <div class="hero-copy">
             <h1>See what your purchase will be worth.</h1>
             <p>
-              Pick an item, enter the purchase price, and Spiffy generates a placeholder
-              medium-depreciation value curve. The current curve is generic across all items.
+              Pick an item, enter the retail price, and Spiffy estimates <strong>like new</strong>, <strong>good</strong>, and <strong>used</strong> resale prices.
             </p>
           </div>
         </section>
 
         <section class="band">
           <h2 class="section-title">What are you thinking of purchasing?</h2>
-          <div class="item-grid" id="item-grid"></div>
+          <p class="section-subtitle">
+            Pick an item to prefill the description, then revise the details you care about.
+          </p>
+          <div class="sample-grid" id="sample-grid"></div>
         </section>
 
-        <section class="band">
-          <div class="price-row">
-            <h3>How much is it?</h3>
-            <label class="price-input" for="purchase-price">
+        <section class="band composer">
+          <div>
+            <h2 class="section-title">Describe the clothing item</h2>
+            <p class="section-subtitle">
+              Include brand, category, size, fabric, color, era, and visible wear when you know it.
+            </p>
+          </div>
+          <textarea id="description-input" placeholder="Example: Patagonia Synchilla fleece pullover in navy, men's medium, lightly worn with no stains or holes."></textarea>
+          <div class="retail-row">
+            <label class="retail-input" for="retail-price">
               <span>$</span>
-              <input id="purchase-price" type="number" min="0" step="0.01" placeholder="Enter purchase price" />
+              <input id="retail-price" type="number" min="1" step="0.01" placeholder="Retail price" />
             </label>
+            <div class="composer-note">Retail price anchors the comparison chart.</div>
+          </div>
+          <div class="composer-row">
+            <div class="composer-note" id="composer-note">Add details, then estimate the three resale prices.</div>
+            <button class="action" id="estimate-button" type="button">Estimate prices</button>
           </div>
         </section>
 
         <section class="band">
-          <div class="chart-head">
+          <div class="results-head">
             <div>
-              <h2>Estimated lifetime value</h2>
-              <p id="selected-item">No item selected yet.</p>
+              <h2 class="section-title">Condition pricing</h2>
+              <p class="results-summary" id="result-summary">No estimate yet.</p>
             </div>
-            <div class="chart-summary">
-              <span class="label">Selected price</span>
-              <strong class="value" id="selected-price">$0</strong>
-            </div>
+            <div class="status-pill" id="result-provider">Awaiting input</div>
           </div>
-          <div class="chart-box">
-            <div class="empty" id="chart-empty">
-              Choose an item and enter a valid price to generate the value curve. The chart spans the same content width as the rest of the layout, matching your sketch.
-            </div>
-            <svg class="chart-svg" id="chart-svg" viewBox="0 0 1100 360" role="img" aria-label="Estimated lifetime value curve" hidden></svg>
+          <div class="price-grid">
+            <article class="price-card">
+              <span class="label">Like New</span>
+              <strong class="value" id="price-like-new">$0</strong>
+              <p>Minimal visible wear. Best-case used-market presentation.</p>
+            </article>
+            <article class="price-card">
+              <span class="label">Good</span>
+              <strong class="value" id="price-good">$0</strong>
+              <p>Normal pre-owned condition with light signs of use.</p>
+            </article>
+            <article class="price-card">
+              <span class="label">Used</span>
+              <strong class="value" id="price-used">$0</strong>
+              <p>Clear wear, but still sellable and functional.</p>
+            </article>
+          </div>
+          <div class="chart-wrap">
+            <svg class="chart-svg" id="price-chart" viewBox="0 0 1100 440" role="img" aria-label="Retail-to-resale price chart"></svg>
           </div>
         </section>
       </div>
     </main>
 
     <script>
-      const ITEMS = {items_json};
-      const itemGrid = document.getElementById("item-grid");
-      const priceInput = document.getElementById("purchase-price");
-      const selectedPrice = document.getElementById("selected-price");
-      const selectedItem = document.getElementById("selected-item");
-      const chartEmpty = document.getElementById("chart-empty");
-      const chartSvg = document.getElementById("chart-svg");
-
-      let activeItem = null;
+      const SAMPLES = {samples_json};
+      const sampleGrid = document.getElementById("sample-grid");
+      const descriptionInput = document.getElementById("description-input");
+      const retailPriceInput = document.getElementById("retail-price");
+      const estimateButton = document.getElementById("estimate-button");
+      const composerNote = document.getElementById("composer-note");
+      const resultSummary = document.getElementById("result-summary");
+      const resultProvider = document.getElementById("result-provider");
+      const priceLikeNew = document.getElementById("price-like-new");
+      const priceGood = document.getElementById("price-good");
+      const priceUsed = document.getElementById("price-used");
+      const priceChart = document.getElementById("price-chart");
 
       function money(value) {{
         return new Intl.NumberFormat("en-US", {{
@@ -566,121 +605,129 @@ def spiffy_home() -> str:
         }}).format(value);
       }}
 
-      function buildCards() {{
-        ITEMS.forEach((item) => {{
+      function renderSamples() {{
+        SAMPLES.forEach((item) => {{
           const button = document.createElement("button");
           button.type = "button";
-          button.className = "item-card";
-          button.dataset.item = item.name;
+          button.className = "sample-card";
           button.innerHTML = `
-            <img class="item-image" src="${{item.image}}" alt="${{item.name}}" />
-            <div class="item-meta">
-              <span class="item-name">${{item.name}}</span>
-              <span class="item-description">${{item.description}}</span>
-            </div>
+            <img class="sample-image" src="${{item.image}}" alt="${{item.name}}" />
+            <span class="sample-tag">${{item.tag}}</span>
+            <span class="sample-name">${{item.name}}</span>
+            <span class="sample-description">${{item.description}}</span>
           `;
           button.addEventListener("click", () => {{
-            activeItem = item;
-            document.querySelectorAll(".item-card").forEach((card) => {{
-              card.classList.toggle("active", card.dataset.item === item.name);
-            }});
-            maybeGenerateCurve();
+            descriptionInput.value = item.description;
+            if (!retailPriceInput.value) {{
+              retailPriceInput.value = "140";
+            }}
+            composerNote.textContent = `Prefilled from ${{item.name}}. Edit the prompt if you want more detail.`;
+            descriptionInput.focus();
           }});
-          itemGrid.appendChild(button);
+          sampleGrid.appendChild(button);
         }});
       }}
 
-      function drawCurve(points) {{
+      function drawChart(retailPrice, prices) {{
         const width = 1100;
-        const height = 360;
-        const left = 68;
-        const right = 28;
-        const top = 24;
-        const bottom = 48;
-        const values = points.map((point) => point.value);
-        const max = Math.max(...values);
-        const min = Math.min(...values);
-        const xStep = (width - left - right) / (points.length - 1);
-        const yRange = Math.max(max - min, max * 0.28, 1);
-        const toX = (index) => left + index * xStep;
-        const toY = (value) => top + ((max - value) / yRange) * (height - top - bottom);
+        const height = 440;
+        const left = 320;
+        const right = 400;
+        const top = 76;
+        const bottom = 76;
+        const retailX = left + 24;
+        const conditionX = width - right + 40;
+        const conditionPoints = [
+          {{ key: "like_new", label: "Like New", value: prices.like_new, color: "#4f8fb7" }},
+          {{ key: "good", label: "Good", value: prices.good, color: "#77afd2" }},
+          {{ key: "used", label: "Used", value: prices.used, color: "#9bc7e2" }},
+        ];
+        const laneGap = (height - top - bottom) / Math.max(conditionPoints.length - 1, 1);
+        const yForIndex = (index) => top + index * laneGap;
 
-        const gridLines = Array.from({{ length: 4 }}, (_, index) => {{
-          const y = top + index * ((height - top - bottom) / 3);
-          return `<line x1="${{left}}" y1="${{y}}" x2="${{width - right}}" y2="${{y}}" stroke="rgba(21,32,43,0.08)" stroke-width="1" />`;
+        const guides = conditionPoints.map((item, index) => {{
+          const y = yForIndex(index);
+          return `
+            <line x1="${{retailX}}" y1="${{y}}" x2="${{conditionX + 6}}" y2="${{y}}" stroke="rgba(24,33,41,0.08)" stroke-width="1" />
+          `;
         }}).join("");
 
-        const labels = points.map((point, index) => `
-          <text x="${{toX(index)}}" y="${{height - 16}}" text-anchor="middle" font-size="12" fill="#5f6d78">${{point.label}}</text>
-        `).join("");
+        const leftAnchor = `
+          <text x="${{retailX - 130}}" y="${{yForIndex(1) - 34}}" font-size="24" fill="#5d6873">Retail</text>
+          <text x="${{retailX - 130}}" y="${{yForIndex(1) + 2}}" font-size="40" font-weight="800" fill="#bb6946">${{money(retailPrice)}}</text>
+        `;
 
-        const area = [
-          `${{left}},${{height - bottom}}`,
-          ...points.map((point, index) => `${{toX(index)}},${{toY(point.value)}}`),
-          `${{toX(points.length - 1)}},${{height - bottom}}`
-        ].join(" ");
+        const segments = conditionPoints.map((item, index) => {{
+          const y = yForIndex(index);
+          return `
+            <line x1="${{retailX}}" y1="${{yForIndex(1)}}" x2="${{conditionX}}" y2="${{y}}" stroke="${{item.color}}" stroke-width="3" stroke-linecap="round" />
+            <circle cx="${{conditionX}}" cy="${{y}}" r="10" fill="${{item.color}}" />
+            <text x="${{conditionX + 22}}" y="${{y - 12}}" font-size="22" fill="#5d6873">${{item.label}}</text>
+            <text x="${{conditionX + 22}}" y="${{y + 30}}" font-size="38" font-weight="800" fill="${{item.color}}">${{money(item.value)}}</text>
+          `;
+        }}).join("");
 
-        const line = points
-          .map((point, index) => `${{toX(index)}},${{toY(point.value)}}`)
-          .join(" ");
-
-        const dots = points.map((point, index) => `
-          <circle cx="${{toX(index)}}" cy="${{toY(point.value)}}" r="6" fill="#4f8fb7" />
-          <text x="${{toX(index)}}" y="${{toY(point.value) - 14}}" text-anchor="middle" font-size="12" font-weight="700" fill="#15202b">${{money(point.value)}}</text>
-        `).join("");
-
-        chartSvg.innerHTML = `
-          <defs>
-            <linearGradient id="curveFill" x1="0" y1="0" x2="0" y2="1">
-              <stop offset="0%" stop-color="rgba(142,197,230,0.42)" />
-              <stop offset="100%" stop-color="rgba(142,197,230,0.08)" />
-            </linearGradient>
-          </defs>
-          ${{gridLines}}
-          <polygon points="${{area}}" fill="url(#curveFill)" />
-          <polyline points="${{line}}" fill="none" stroke="#4f8fb7" stroke-width="5" stroke-linecap="round" stroke-linejoin="round" />
-          ${{dots}}
-          ${{labels}}
+        priceChart.innerHTML = `
+          ${{guides}}
+          ${{segments}}
+          ${{leftAnchor}}
+          <circle cx="${{retailX}}" cy="${{yForIndex(1)}}" r="11" fill="#bb6946" />
         `;
       }}
 
-      async function maybeGenerateCurve() {{
-        const price = Number(priceInput.value);
-
-        if (!activeItem || !Number.isFinite(price) || price <= 0) {{
-          selectedPrice.textContent = "$0";
-          selectedItem.textContent = activeItem
-            ? `${{activeItem.name}} selected. Add a valid price to generate the curve.`
-            : "No item selected yet.";
-          chartSvg.hidden = true;
-          chartEmpty.hidden = false;
-          return;
-        }}
-
-        selectedPrice.textContent = money(price);
-        selectedItem.textContent = `Showing the generic medium-depreciation curve for ${{activeItem.name}}.`;
-
-        const response = await fetch("/api/lifetime-curve", {{
-          method: "POST",
-          headers: {{ "Content-Type": "application/json" }},
-          body: JSON.stringify({{ item_name: activeItem.name, purchase_price: price }})
-        }});
-
-        if (!response.ok) {{
-          chartSvg.hidden = true;
-          chartEmpty.hidden = false;
-          chartEmpty.textContent = "Unable to generate the curve right now.";
-          return;
-        }}
-
-        const data = await response.json();
-        drawCurve(data.points);
-        chartEmpty.hidden = true;
-        chartSvg.hidden = false;
+      function setBusy(isBusy) {{
+        estimateButton.disabled = isBusy;
+        estimateButton.textContent = isBusy ? "Estimating..." : "Estimate prices";
       }}
 
-      priceInput.addEventListener("input", maybeGenerateCurve);
-      buildCards();
+      async function estimatePrices() {{
+        const description = descriptionInput.value.trim();
+        const retailPrice = Number(retailPriceInput.value);
+        if (description.length < 8) {{
+          resultSummary.textContent = "Add a fuller clothing description before running inference.";
+          resultProvider.textContent = "Need more detail";
+          return;
+        }}
+        if (!Number.isFinite(retailPrice) || retailPrice <= 0) {{
+          resultSummary.textContent = "Add a valid retail price before running inference.";
+          resultProvider.textContent = "Need retail price";
+          return;
+        }}
+
+        setBusy(true);
+        resultSummary.textContent = "Generating the price estimate...";
+        resultProvider.textContent = "Working";
+
+        try {{
+          const response = await fetch("/api/condition-prices", {{
+            method: "POST",
+            headers: {{ "Content-Type": "application/json" }},
+            body: JSON.stringify({{ description, retail_price: retailPrice }})
+          }});
+
+          if (!response.ok) {{
+            resultSummary.textContent = "The pricing request failed.";
+            resultProvider.textContent = "Request failed";
+            return;
+          }}
+
+          const payload = await response.json();
+          priceLikeNew.textContent = money(payload.prices.like_new);
+          priceGood.textContent = money(payload.prices.good);
+          priceUsed.textContent = money(payload.prices.used);
+          resultSummary.textContent = payload.item_summary;
+          resultProvider.textContent = "Estimate ready";
+          drawChart(payload.retail_price, payload.prices);
+        }} catch (error) {{
+          resultSummary.textContent = "The pricing request could not be completed.";
+          resultProvider.textContent = "Unavailable";
+        }} finally {{
+          setBusy(false);
+        }}
+      }}
+
+      estimateButton.addEventListener("click", estimatePrices);
+      renderSamples();
     </script>
   </body>
 </html>"""
@@ -689,41 +736,20 @@ def spiffy_home() -> str:
 @app.get("/api")
 def api_root() -> dict[str, Any]:
     return {
-        "message": "Spiffy value prediction service",
-        "example_request": prediction_example(),
-        "curve_items": ITEM_OPTIONS,
+        "message": "Spiffy condition pricing service",
+        "example_request": pricing_request_example(),
+        "sample_items": ITEM_OPTIONS,
+        "provider": _pricing_backend.provider_name,
     }
 
 
 @app.get("/health")
-def health() -> dict[str, bool | str]:
-    return {"status": "ok", "model_loaded": _model_loaded}
+def health() -> dict[str, Any]:
+    return {"status": "ok", **_pricing_backend.health()}
 
 
 @app.post("/predict")
-def predict(payload: PredictionRequest) -> dict[str, float | str]:
-    frame = pd.DataFrame([payload.model_dump()])
-    assert _serving_model is not None
-    prediction = float(_serving_model.predict(frame)[0])
-    return {
-        "predicted_sale_price": round(prediction, 2),
-        "model_status": "ok",
-    }
-
-
-@app.post("/api/lifetime-curve")
-def lifetime_curve(payload: LifetimeCurveRequest) -> dict[str, Any]:
-    normalized_item = payload.item_name.strip().lower()
-    if normalized_item not in ITEM_OPTIONS:
-        return {
-            "item_name": payload.item_name,
-            "curve_type": "medium_depreciation",
-            "points": _curve_points(payload.purchase_price),
-            "warning": "Item not in preset list; generic curve returned.",
-        }
-
-    return {
-        "item_name": payload.item_name,
-        "curve_type": "medium_depreciation",
-        "points": _curve_points(payload.purchase_price),
-    }
+@app.post("/api/condition-prices")
+def condition_prices(payload: PricingRequest) -> dict[str, Any]:
+    result = _pricing_backend.estimate(payload.description, payload.retail_price)
+    return _result_payload(payload.description, payload.retail_price, result)
