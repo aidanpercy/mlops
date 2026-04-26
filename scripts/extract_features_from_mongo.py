@@ -92,6 +92,8 @@ FEATURE_KEYS = [
     "condition",
     "condition_detail",
     "has_box",
+    "parsed_price",
+    "original_price",
 ]
 
 SYSTEM_PROMPT = (
@@ -114,7 +116,9 @@ SYSTEM_PROMPT = (
     "Return release_year_min and release_year_max as the plausible production year range when you can infer a range, otherwise ''. "
     "Return release_year_confidence as a numeric string from 0.00 to 1.00 based on confidence in the year value or estimate, otherwise ''. "
     "Use title, query, and condition text together. "
-    "Capture obvious tokens such as size systems, measurements, style code, product line, sport, colors, materials, fit, neckline, sleeve length, and model name when present."
+    "Capture obvious tokens such as size systems, measurements, style code, product line, sport, colors, materials, fit, neckline, sleeve length, and model name when present. "
+    "parsed_price should be the numeric sale/listing price taken from price_value or price_text as a plain decimal string (e.g. '49.99'), with no currency symbols or thousands separators, otherwise ''. "
+    "original_price should be the original/MSRP/retail price when explicitly mentioned in the title or condition text as a plain decimal string, otherwise ''."
 )
 
 ROW_INPUT_FIELDS = [
