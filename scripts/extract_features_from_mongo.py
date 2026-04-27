@@ -118,7 +118,7 @@ SYSTEM_PROMPT = (
     "Use title, query, and condition text together. "
     "Capture obvious tokens such as size systems, measurements, style code, product line, sport, colors, materials, fit, neckline, sleeve length, and model name when present. "
     "parsed_price should be the numeric sale/listing price taken from price_value or price_text as a plain decimal string (e.g. '49.99'), with no currency symbols or thousands separators, otherwise ''. "
-    "original_price should be the best guess of item value if purchased new. "
+    "original_price should be best estimate of item value if purchased new. Don't leave original_price empty"
 )
 
 ROW_INPUT_FIELDS = [
