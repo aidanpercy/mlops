@@ -118,7 +118,7 @@ SYSTEM_PROMPT = (
     "Use title, query, and condition text together. "
     "Capture obvious tokens such as size systems, measurements, style code, product line, sport, colors, materials, fit, neckline, sleeve length, and model name when present. "
     "parsed_price should be the numeric sale/listing price taken from price_value or price_text as a plain decimal string (e.g. '49.99'), with no currency symbols or thousands separators, otherwise ''. "
-    "original_price should be best estimate of item value if purchased new. Don't leave original_price empty"
+    "original_price should be the explicit original / MSRP / 'was' price if (and only if) it appears in the listing text, as a plain decimal string with no currency symbols or thousands separators. If no original price is stated in the listing, return ''. Do not estimate or guess original_price here."
 )
 
 ROW_INPUT_FIELDS = [
