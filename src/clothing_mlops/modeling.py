@@ -12,11 +12,11 @@ import mlflow.pyfunc
 import pandas as pd
 import yaml
 from sklearn.compose import ColumnTransformer
-from sklearn.ensemble import RandomForestRegressor
 from sklearn.metrics import mean_absolute_error, mean_squared_error
 from sklearn.model_selection import train_test_split
 from sklearn.pipeline import Pipeline
 from sklearn.preprocessing import OneHotEncoder
+from xgboost import XGBRegressor
 
 from clothing_mlops.data_pipeline import feature_columns, target_column
 from clothing_mlops.mlflow_setup import set_experiment
@@ -102,14 +102,30 @@ def build_training_pipeline() -> Pipeline:
     ]
     preprocessor = ColumnTransformer(
         transformers=[
-            ("categorical", OneHotEncoder(handle_unknown="ignore"), categorical_features),
+            (
+                "categorical",
+                OneHotEncoder(handle_unknown="ignore", sparse_output=False),
+                categorical_features,
+            ),
             ("numeric", "passthrough", numeric_features),
         ]
     )
     return Pipeline(
         steps=[
             ("preprocessor", preprocessor),
-            ("model", RandomForestRegressor(n_estimators=200, random_state=42)),
+            (
+                "model",
+                XGBRegressor(
+                    n_estimators=300,
+                    max_depth=6,
+                    learning_rate=0.05,
+                    subsample=0.9,
+                    colsample_bytree=0.9,
+                    random_state=42,
+                    n_jobs=-1,
+                    tree_method="hist",
+                ),
+            ),
         ]
     )
 
@@ -129,7 +145,7 @@ def train_and_log_model(
     set_experiment()
     pipeline = build_training_pipeline()
 
-    with mlflow.start_run(run_name="sold-listings-baseline") as run:
+    with mlflow.start_run(run_name="sold-listings-xgboost") as run:
         pipeline.fit(X_train, y_train)
         predictions = pipeline.predict(X_test)
         mae = mean_absolute_error(y_test, predictions)
@@ -140,7 +156,7 @@ def train_and_log_model(
             {
                 "dataset_path": str(dataset_path),
                 "feature_count": len(feature_columns()),
-                "feature_set_version": "v1",
+                "feature_set_version": "v2_xgboost",
                 "registered_model_name": registered_model_name or "none",
                 "record_count": len(df),
                 "date_min": df["sold_date"].min(),

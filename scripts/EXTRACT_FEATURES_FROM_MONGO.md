@@ -187,3 +187,10 @@ aidan_data_parsing/
 - `aidan_data_parsing/parse_one_pending_row.py` — step 2 of the CSV pipeline;
   same FEATURE_KEYS, same NVIDIA model, but driven by CSV state instead of
   MongoDB state.
+- `scripts/export_mongo_parsed_for_training.py` — pulls the parsed Mongo
+  documents into a CSV that matches the schema expected by
+  `scripts/train_price_rf.py`. Use `--train` to chain straight into training.
+- `scripts/train_price_rf.py --from-mongo` — same MongoDB loader, but skips
+  the intermediate CSV and trains the XGBoost price model directly from the
+  Mongo `parsed` collection. Add `--mongo-cache-csv <path>` if you also want a
+  snapshot of the rows used.
