@@ -24,30 +24,35 @@ ITEM_CATALOG = [
         "tag": "Archive tee",
         "description": "2000s-era Supreme box logo t-shirt, size large, bright red cotton, light wear with no cracking.",
         "image": "/static/images/supreme.webp",
+        "retail_price": 32,
     },
     {
         "name": "Levi's Women’s 501",
         "tag": "Denim staple",
         "description": "Levi's 501 jeans, women's 27, medium wash, broken-in denim, clean hems, gently worn.",
         "image": "/static/images/levis.avif",
+        "retail_price": 108,
     },
     {
         "name": "Balenciaga City Bag",
         "tag": "Designer bag",
         "description": "Balenciaga City bag in black leather with silver hardware, soft slouch, minor corner wear.",
         "image": "/static/images/balenciaga.jpg",
+        "retail_price": 2990,
     },
     {
         "name": "Air Jordan 4 Military Black",
         "tag": "Sneaker release",
         "description": "Air Jordan 4 Military Black, size 10.5, 2022 release, worn a handful of times with clean uppers.",
         "image": "/static/images/jordans.avif",
+        "retail_price": 210,
     },
     {
         "name": "Fear of God Essentials Hoodie",
         "tag": "Premium basics",
         "description": "Fear of God Essentials hoodie in oatmeal, men's medium, heavyweight fleece, minimal wear.",
         "image": "/static/images/foggg.jpeg",
+        "retail_price": 140,
     },
 ]
 
@@ -358,6 +363,22 @@ def spiffy_home() -> str:
         box-shadow: 0 0 0 4px rgba(223, 240, 251, 0.9);
       }}
 
+      .promo-banner {{
+        display: flex;
+        justify-content: center;
+        padding: 0;
+        background: transparent;
+        border: 0;
+        box-shadow: none;
+      }}
+
+      .promo-banner-image {{
+        display: block;
+        width: min(100%, 765px);
+        height: auto;
+        border-radius: 0;
+      }}
+
       .composer-row {{
         display: flex;
         justify-content: space-between;
@@ -489,6 +510,7 @@ def spiffy_home() -> str:
         .price-grid {{
           grid-template-columns: 1fr;
         }}
+
       }}
 
       @media (max-width: 560px) {{
@@ -549,6 +571,10 @@ def spiffy_home() -> str:
             <div class="composer-note" id="composer-note">Add details, then estimate the three resale prices.</div>
             <button class="action" id="estimate-button" type="button">Estimate prices</button>
           </div>
+        </section>
+
+        <section class="promo-banner" aria-label="Sponsored product">
+          <img class="promo-banner-image" src="/static/images/patagonia.png" alt="Patagonia ad for the Women's Shell 3L Rain Jacket in Aquatic Blue priced at $189." />
         </section>
 
         <section class="band">
@@ -618,10 +644,8 @@ def spiffy_home() -> str:
           `;
           button.addEventListener("click", () => {{
             descriptionInput.value = item.description;
-            if (!retailPriceInput.value) {{
-              retailPriceInput.value = "140";
-            }}
-            composerNote.textContent = `Prefilled from ${{item.name}}. Edit the prompt if you want more detail.`;
+            retailPriceInput.value = String(item.retail_price);
+            composerNote.textContent = `Prefilled from ${{item.name}} with an estimated retail price of ${{money(item.retail_price)}}. Edit either field if needed.`;
             descriptionInput.focus();
           }});
           sampleGrid.appendChild(button);
