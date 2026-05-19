@@ -4,51 +4,172 @@ Version: 0.1.0
 Summary: Clothing value prediction with eBay data and MLflow
 Requires-Python: >=3.10
 Description-Content-Type: text/markdown
+Requires-Dist: beautifulsoup4>=4.12
+Requires-Dist: fastapi<1,>=0.115
+Requires-Dist: google-genai>=1.20.0
+Requires-Dist: httpx<1,>=0.27
 Requires-Dist: mlflow<3,>=2.10
 Requires-Dist: pandas>=2.0
 Requires-Dist: numpy>=1.24
-Requires-Dist: scikit-learn>=1.3
+Requires-Dist: scikit-learn==1.7.2
+Requires-Dist: xgboost<4,>=2.0
 Requires-Dist: python-dotenv>=1.0
+Requires-Dist: requests<3,>=2.31
+Requires-Dist: uvicorn<1,>=0.30
 
-# Clothing value prediction (MLOps)
+# Clothing Value Prediction (MLOps)
 
-Predict clothing depreciation or appreciation using listing data (planned: **eBay API**). This repo wires up **MLflow** for experiment tracking before real data lands.
+<img width="600" height="390" alt="Screen Recording 2026-05-03 at 8 21 50 PM" src="https://github.com/user-attachments/assets/f1687451-c422-4899-9037-7b04ff49167b" />
+
+This repo now serves a Vertex AI-ready pricing website for used clothing. The current web app,
+`Spiffy`, accepts a free-text clothing description plus a retail price and returns three resale
+price estimates:
+
+- `like_new`
+- `good`
+- `used`
+
+The app is designed to use a Vertex AI LLM now and to make a later swap to a custom Vertex AI
+model straightforward. The pricing integration is isolated in
+[`src/clothing_mlops/vertex_pricing.py`](/Users/aidanpercy/Desktop/603/mlops/src/clothing_mlops/vertex_pricing.py:1).
+
+## What changed
+
+- The old depreciation-curve UI was replaced with a text-plus-retail pricing workflow.
+- `POST /api/condition-prices` is the new UI endpoint.
+- `POST /predict` remains available as an alias for the same pricing request.
+- Vertex AI is the primary inference path.
+- A deterministic local heuristic fallback keeps the app usable when Vertex AI is not configured.
+- The UI visualizes the result as a chart from retail to the three condition prices.
 
 ## Quick start
 
 ```bash
-cd final_project
-python3 -m venv .venv
-source .venv/bin/activate   # Windows: .venv\Scripts\activate
+cd /Users/aidanpercy/Desktop/603/mlops
+python3 -m venv venv
+source venv/bin/activate
 pip install -U pip
 pip install -e .
 ```
 
-Log a placeholder run (creates `./mlruns`):
+Run the app:
 
 ```bash
-python scripts/train_placeholder.py
+uvicorn clothing_mlops.service:app --reload
 ```
 
-Browse experiments in the UI (separate terminal):
+Open [http://127.0.0.1:8000](http://127.0.0.1:8000).
+
+## Vertex AI setup
+
+Install the Google Cloud CLI and authenticate with Application Default Credentials:
 
 ```bash
-mlflow ui --backend-store-uri file:./mlruns
+gcloud init
+gcloud auth application-default login
 ```
 
-Open http://127.0.0.1:5000 — you should see experiment `clothing-value-prediction` and run `placeholder-baseline`.
+Set environment variables for Vertex AI:
 
-## Configuration
+```bash
+export GOOGLE_CLOUD_PROJECT="your-gcp-project-id"
+export GOOGLE_CLOUD_LOCATION="global"
+export VERTEX_AI_MODEL="gemini-2.5-flash"
+export GOOGLE_GENAI_USE_VERTEXAI=True
+```
 
-| Env var | Purpose |
-|--------|---------|
-| `MLFLOW_TRACKING_URI` | Defaults to `file:<repo>/mlruns`. Set to a remote server when you have one. |
-| `MLFLOW_EXPERIMENT_NAME` | Defaults to `clothing-value-prediction`. |
+Optional tuning knobs:
 
-## Where to go next
+```bash
+export VERTEX_AI_LOCATION="global"
+export VERTEX_AI_TEMPERATURE="0.2"
+```
 
-1. **Ingest**: script or job that pulls eBay listings → raw tables/files (store paths or hashes in MLflow tags).
-2. **Train**: replace `scripts/train_placeholder.py` with real features + model; log `mlflow.log_params`, `mlflow.log_metrics`, and `mlflow.sklearn.log_model` (or `pyfunc`) when ready.
-3. **Registry**: use MLflow Model Registry when you have a baseline worth promoting.
+If these variables are missing, the service falls back to a local rule-based estimator and returns
+that status in the API response.
 
-`mlruns/` is gitignored; commit code and configs, not local run stores (or export to a shared tracking server for the team).
+Verify the adapter directly before running the UI:
+
+```bash
+python scripts/check_vertex_pricing.py \
+  --description "Patagonia Synchilla fleece pullover in navy, men's medium, lightly worn with no stains or holes." \
+  --retail-price 139
+```
+
+If Vertex AI is configured correctly, the JSON output should show `"provider": "vertex_ai"`. If it
+shows `"provider": "heuristic_fallback"`, either ADC or the required environment variables are still
+missing.
+
+## API
+
+### `GET /`
+
+Serves the `Spiffy` web app.
+
+### `GET /api`
+
+Returns API metadata and an example request body.
+
+### `GET /health`
+
+Returns service status plus whether Vertex AI is configured.
+
+### `POST /api/condition-prices`
+
+Primary pricing endpoint for the website.
+
+Request:
+
+```json
+{
+  "description": "Patagonia Synchilla fleece pullover in navy, men's medium, lightly worn with no stains or holes.",
+  "retail_price": 139.0
+}
+```
+
+Response:
+
+```json
+{
+  "description": "Patagonia Synchilla fleece pullover in navy, men's medium, lightly worn with no stains or holes.",
+  "retail_price": 139.0,
+  "item_summary": "Patagonia Synchilla fleece pullover in navy, men's medium, lightly worn with no stains or holes.",
+  "prices": {
+    "like_new": 110.0,
+    "good": 93.0,
+    "used": 69.0
+  },
+  "provider": "vertex_ai",
+  "model": "gemini-2.5-flash",
+  "confidence_notes": "Pricing reflects inferred resale positioning for this category and brand."
+}
+```
+
+### `POST /predict`
+
+Alias for `POST /api/condition-prices`.
+
+## Local verification
+
+```bash
+curl http://127.0.0.1:8000/api
+curl http://127.0.0.1:8000/health
+curl -X POST http://127.0.0.1:8000/api/condition-prices \
+  -H "Content-Type: application/json" \
+  -d '{
+    "description": "Fear of God Essentials hoodie in oatmeal, mens medium, minimal wear.",
+    "retail_price": 120
+  }'
+```
+
+## Future custom model path
+
+When you move from Gemini to a custom Vertex AI model, keep the FastAPI contract stable and swap the
+implementation behind the pricing adapter. The cleanest next step is to add a second backend in
+`vertex_pricing.py` that targets your deployed Vertex endpoint while keeping the same output shape.
+
+## Notes
+
+- `google-genai` is included as the SDK dependency for the current Vertex AI LLM path.
+- The rest of the repo still contains the original ML/data pipeline code for training and MLOps
+  coursework, but the web UI is now centered on the Vertex AI pricing flow.

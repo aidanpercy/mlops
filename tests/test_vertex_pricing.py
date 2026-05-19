@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 import unittest
 from unittest.mock import patch
 
@@ -130,16 +131,17 @@ class VertexPricingBuildBackendTestCase(unittest.TestCase):
     def test_build_pricing_backend_with_project_uses_primary(self) -> None:
         with patch("clothing_mlops.vertex_pricing.VertexAISettings.from_env") as mock_from_env:
             with patch("clothing_mlops.vertex_pricing.VertexAIPricingBackend") as mock_primary_cls:
-                mock_from_env.return_value = VertexAISettings(
-                    project="demo-project",
-                    location="global",
-                    model="gemini-2.5-flash",
-                    temperature=0.2,
-                )
-                primary_instance = mock_primary_cls.return_value
-                primary_instance.provider_name = "vertex_ai"
+                with patch.dict(os.environ, {"PRICING_MODEL_PATH": ""}, clear=False):
+                    mock_from_env.return_value = VertexAISettings(
+                        project="demo-project",
+                        location="global",
+                        model="gemini-2.5-flash",
+                        temperature=0.2,
+                    )
+                    primary_instance = mock_primary_cls.return_value
+                    primary_instance.provider_name = "vertex_ai"
 
-                backend = build_pricing_backend()
+                    backend = build_pricing_backend()
 
         self.assertEqual(backend.provider_name, "vertex_ai")
         self.assertEqual(
@@ -147,6 +149,50 @@ class VertexPricingBuildBackendTestCase(unittest.TestCase):
             {"provider": "vertex_ai", "vertex_ai_configured": True, "setup_warning": None},
         )
         mock_primary_cls.assert_called_once()
+
+    def test_build_pricing_backend_with_model_path_uses_xgboost(self) -> None:
+        with patch("clothing_mlops.vertex_pricing.VertexAISettings.from_env") as mock_from_env, patch(
+            "clothing_mlops.vertex_pricing.XGBoostHybridPricingBackend"
+        ) as mock_xgb_cls, patch(
+            "clothing_mlops.vertex_pricing.VertexAIPricingBackend"
+        ) as mock_gemini_cls, patch.dict(
+            os.environ,
+            {"PRICING_MODEL_PATH": "tests/test_vertex_pricing.py"},
+            clear=False,
+        ):
+            mock_from_env.return_value = VertexAISettings(
+                project="demo-project",
+                location="global",
+                model="gemini-2.5-flash",
+                temperature=0.2,
+            )
+            xgb_instance = mock_xgb_cls.return_value
+            xgb_instance.provider_name = "xgboost_via_vertex"
+
+            backend = build_pricing_backend()
+
+        self.assertEqual(backend.provider_name, "xgboost_via_vertex")
+        mock_xgb_cls.assert_called_once()
+        mock_gemini_cls.assert_not_called()
+
+    def test_build_pricing_backend_warns_when_model_missing(self) -> None:
+        with patch("clothing_mlops.vertex_pricing.VertexAISettings.from_env") as mock_from_env, patch.dict(
+            os.environ,
+            {"PRICING_MODEL_PATH": "definitely/not/a/real/model.joblib"},
+            clear=False,
+        ):
+            mock_from_env.return_value = VertexAISettings(
+                project="demo-project",
+                location="global",
+                model="gemini-2.5-flash",
+                temperature=0.2,
+            )
+            backend = build_pricing_backend()
+
+        self.assertEqual(backend.provider_name, "heuristic_fallback")
+        warning = backend.health()["setup_warning"]
+        self.assertIsInstance(warning, str)
+        self.assertIn("PRICING_MODEL_PATH", warning or "")
 
     def test_fallback_warning_is_attached_on_primary_failure(self) -> None:
         router = PricingBackendRouter(

@@ -8,7 +8,9 @@ WORKDIR /app
 
 COPY pyproject.toml requirements.txt README.md ./
 COPY src ./src
+COPY static ./static
 COPY mlruns ./mlruns
+COPY models ./models
 
 RUN pip install --no-cache-dir --upgrade pip && \
     pip install --no-cache-dir -e .

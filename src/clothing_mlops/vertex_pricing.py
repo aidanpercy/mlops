@@ -6,6 +6,8 @@ import json
 import os
 import re
 from dataclasses import dataclass
+from pathlib import Path
+from typing import Any, Protocol
 
 from dotenv import load_dotenv
 
@@ -250,11 +252,219 @@ Retail price (USD):
         )
 
 
+FEATURE_EXTRACTION_KEYS: tuple[str, ...] = (
+    "item_summary",
+    "brand_name",
+    "item_type",
+    "item_subtype",
+    "department",
+    "gender",
+    "age_group",
+    "size",
+    "size_type",
+    "color_primary",
+    "color_secondary",
+    "material_primary",
+    "material_secondary",
+    "pattern",
+    "closure",
+    "fit",
+    "sleeve_length",
+    "neckline",
+    "style",
+    "occasion",
+    "season",
+    "sport",
+    "model_name",
+    "product_line",
+    "style_code",
+    "has_box",
+    "condition_detail",
+    "original_price",
+    "release_year",
+)
+
+FEATURE_EXTRACTION_SCHEMA = {
+    "type": "OBJECT",
+    "properties": {key: {"type": "STRING"} for key in FEATURE_EXTRACTION_KEYS},
+    "required": list(FEATURE_EXTRACTION_KEYS),
+    "propertyOrdering": list(FEATURE_EXTRACTION_KEYS),
+}
+
+FEATURE_EXTRACTION_PROMPT = """
+You extract structured apparel resale features from a free-text product description.
+Return only valid JSON with exactly these keys, all values as strings:
+{keys}.
+Use an empty string when a field is not explicit or not reliable. Do not invent values.
+
+Normalization rules:
+- item_type: lowercase short category such as sneakers, jeans, hoodie, jacket, dress, shoe, t-shirt.
+- item_subtype: more specific subtype such as bomber jacket, straight leg jeans, crewneck sweater.
+- department: one of footwear, tops, bottoms, outerwear, dresses, accessories, or ''.
+- gender: one of men, women, unisex, boys, girls, or ''.
+- age_group: one of adult, kids, or ''.
+- has_box: one of yes, no, or ''.
+- original_price: only if explicitly stated as MSRP / 'was' price, as a plain decimal (e.g. '129.99'); else ''.
+- release_year: only if explicitly stated as a 4-digit year; else ''.
+- item_summary: a one-sentence human-readable summary of the item suitable for display.
+
+Description:
+{description}
+""".strip()
+
+
+class _PricingBackend(Protocol):
+    provider_name: str
+
+    def estimate(self, description: str, retail_price: float) -> PricingResult: ...
+
+
+class XGBoostHybridPricingBackend:
+    """Pricing backend that extracts features via Vertex AI Gemini and predicts
+    the three condition prices with a locally-loaded XGBoost sklearn Pipeline."""
+
+    provider_name = "xgboost_via_vertex"
+
+    def __init__(self, settings: VertexAISettings, model_path: Path) -> None:
+        if not settings.project:
+            raise ValueError(
+                "GOOGLE_CLOUD_PROJECT is required for the XGBoost hybrid pricing backend."
+            )
+        if not model_path.exists():
+            raise FileNotFoundError(f"Pricing model not found: {model_path}")
+        try:
+            import joblib  # local to keep module import cheap
+        except ImportError as exc:  # pragma: no cover - sklearn ships joblib
+            raise ImportError(
+                "joblib is required to load the trained pricing model"
+            ) from exc
+
+        self._settings = settings
+        self._model_path = model_path
+        self._pipeline = joblib.load(model_path)
+        self.model_name = f"xgboost+{settings.model}"
+
+    def estimate(self, description: str, retail_price: float) -> PricingResult:
+        retail = round(max(retail_price, 15.0), 2)
+        features = self._extract_features(description)
+        item_summary = (features.get("item_summary") or _normalize_description(description))[:300]
+
+        pred_new = self._predict(features, condition="new", retail_price=retail)
+        pred_used = self._predict(features, condition="used", retail_price=retail)
+
+        like_new = max(pred_new, pred_used)
+        used = min(pred_new, pred_used)
+        good = (like_new + used) / 2.0
+
+        like_new, good, used = _normalize_price_ladder(
+            retail_price=retail,
+            like_new=like_new,
+            good=good,
+            used=used,
+        )
+
+        brand = features.get("brand_name") or "unknown"
+        item_type = features.get("item_type") or "unknown"
+        return PricingResult(
+            item_summary=item_summary,
+            retail_price=retail,
+            like_new=like_new,
+            good=good,
+            used=used,
+            provider=self.provider_name,
+            model=self.model_name,
+            confidence_notes=(
+                f"XGBoost resale ladder anchored to retail ${retail:,.2f}. "
+                f"Extracted brand='{brand}', item='{item_type}'. "
+                f"Predictions vary the model's condition feature between 'new' and 'used'."
+            ),
+        )
+
+    def _extract_features(self, description: str) -> dict[str, str]:
+        from google import genai
+        from google.genai.types import HttpOptions
+
+        client = genai.Client(
+            vertexai=True,
+            project=self._settings.project,
+            location=self._settings.location,
+            http_options=HttpOptions(api_version="v1"),
+        )
+
+        prompt = FEATURE_EXTRACTION_PROMPT.format(
+            keys=", ".join(FEATURE_EXTRACTION_KEYS),
+            description=_normalize_description(description),
+        )
+        response = client.models.generate_content(
+            model=self._settings.model,
+            contents=prompt,
+            config={
+                "temperature": self._settings.temperature,
+                "response_mime_type": "application/json",
+                "response_schema": FEATURE_EXTRACTION_SCHEMA,
+            },
+        )
+        try:
+            parsed: Any = json.loads(response.text)
+        except (TypeError, json.JSONDecodeError):
+            parsed = {}
+        if not isinstance(parsed, dict):
+            parsed = {}
+        return {key: str(parsed.get(key, "") or "") for key in FEATURE_EXTRACTION_KEYS}
+
+    def _predict(
+        self,
+        features: dict[str, str],
+        *,
+        condition: str,
+        retail_price: float,
+    ) -> float:
+        import pandas as pd
+
+        cat_cols = (
+            "brand_name", "item_type", "item_subtype", "department", "gender",
+            "age_group", "size_type", "color_primary", "color_secondary",
+            "material_primary", "material_secondary", "pattern", "closure",
+            "fit", "sleeve_length", "neckline", "style", "occasion", "season",
+            "sport", "has_box", "condition_detail",
+            "size", "model_name", "product_line", "style_code",
+            "initial_price_catalog_item",
+        )
+        row: dict[str, Any] = {}
+        for col in cat_cols:
+            value = (features.get(col, "") or "").strip()
+            row[col] = value or "unknown"
+        row["condition"] = condition or "unknown"
+        row["initial_price"] = float(retail_price)
+        row["original_price"] = self._coerce_float(
+            features.get("original_price"), default=float(retail_price)
+        )
+        row["release_year"] = self._coerce_float(
+            features.get("release_year"), default=float("nan")
+        )
+
+        df = pd.DataFrame([row])
+        prediction = float(self._pipeline.predict(df)[0])
+        return max(prediction, 0.0)
+
+    @staticmethod
+    def _coerce_float(value: object, *, default: float) -> float:
+        if value is None:
+            return default
+        text = str(value).replace(",", "").replace("$", "").strip()
+        if not text:
+            return default
+        try:
+            return float(text)
+        except ValueError:
+            return default
+
+
 class PricingBackendRouter:
     def __init__(
         self,
         *,
-        primary: VertexAIPricingBackend | None,
+        primary: _PricingBackend | None,
         fallback: HeuristicPricingBackend,
         setup_warning: str | None,
     ) -> None:
@@ -294,6 +504,18 @@ class PricingBackendRouter:
             return fallback_result
 
 
+def _resolve_pricing_model_path() -> Path | None:
+    """Resolve PRICING_MODEL_PATH against repo root when given relatively."""
+    raw = (os.getenv("PRICING_MODEL_PATH") or "").strip()
+    if not raw:
+        return None
+    candidate = Path(raw).expanduser()
+    if not candidate.is_absolute():
+        repo_root = Path(__file__).resolve().parents[2]
+        candidate = (repo_root / candidate).resolve()
+    return candidate
+
+
 def build_pricing_backend() -> PricingBackendRouter:
     fallback = HeuristicPricingBackend()
     settings = VertexAISettings.from_env()
@@ -305,13 +527,29 @@ def build_pricing_backend() -> PricingBackendRouter:
             setup_warning="Set GOOGLE_CLOUD_PROJECT to enable Vertex AI pricing.",
         )
 
-    try:
-        primary = VertexAIPricingBackend(settings)
-    except ImportError:
+    model_path = _resolve_pricing_model_path()
+    if model_path is not None and not model_path.exists():
         return PricingBackendRouter(
             primary=None,
             fallback=fallback,
-            setup_warning="Install google-genai to enable Vertex AI pricing.",
+            setup_warning=(
+                "PRICING_MODEL_PATH points to a missing file: "
+                f"{model_path}. Train one with `python scripts/train_price_rf.py --from-mongo`."
+            ),
+        )
+
+    try:
+        primary: _PricingBackend
+        if model_path is not None:
+            primary = XGBoostHybridPricingBackend(settings, model_path)
+        else:
+            primary = VertexAIPricingBackend(settings)
+    except ImportError as exc:
+        missing = "google-genai" if "genai" in str(exc) else str(exc)
+        return PricingBackendRouter(
+            primary=None,
+            fallback=fallback,
+            setup_warning=f"Install {missing} to enable Vertex AI pricing.",
         )
 
     return PricingBackendRouter(primary=primary, fallback=fallback, setup_warning=None)
